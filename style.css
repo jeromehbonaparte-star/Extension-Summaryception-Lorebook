@@ -179,3 +179,58 @@
 .sc-snippet-delete:hover {
     opacity: 1;
 }
+
+/* ─── Catch-Up Dialog ─────────────────────────────────────────── */
+
+.sc-catchup-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sc-catchup-modal {
+    background: var(--SmartThemeBlurTintColor, #1a1a2e);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 12px;
+    padding: 24px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.sc-catchup-modal h3 {
+    margin: 0 0 16px 0;
+}
+
+.sc-catchup-dialog p {
+    margin: 8px 0;
+    line-height: 1.5;
+}
+
+.sc-catchup-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.sc-catchup-options .menu_button {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 12px 16px;
+    text-align: left;
+    gap: 4px;
+}
+
+.sc-catchup-options .menu_button small {
+    opacity: 0.6;
+    font-size: 0.8em;
+}

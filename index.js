@@ -28,20 +28,68 @@ const defaultSettings = Object.freeze({
     injectionTemplate: '[Narrative Memory — oldest → most recent]\n{{summary}}',
 
     summarizerSystemPrompt:
-        'You are a precise narrative-state tracker. You output only the summary line — no preamble, no commentary, no markdown.',
+    'You are a precise narrative-state tracker. You output only the summary line — no preamble, no commentary, no markdown.',
 
     summarizerUserPrompt:
-`<player_name>{{player_name}}</player_name>
-<prior_context>{{context_str}}</prior_context>
-<passage_in_question>{{story_txt}}</passage_in_question>
+    `<player_name>{{player_name}}</player_name>
+    <prior_context>{{context_str}}</prior_context>
+    <passage_in_question>{{story_txt}}</passage_in_question>
 
-Summarize only the necessary elements from the Passage_in_Question to coherently continue the Prior_Context, focusing on story, plot points, plans, tasks, quests, significant changes to player/world/setting.
-Exclude anything insubstantial, fluff, atmospheric details, or events already covered in Prior Context.
-Skip any passages that are empty, unclear, or lack significant content.
-Write in short phrases, no more than 20; output must be a single line:`,
+    Summarize only the necessary elements from the Passage_in_Question to coherently continue the Prior_Context, focusing on story, plot points, plans, tasks, quests, significant changes to player/world/setting.
+    Exclude anything insubstantial, fluff, atmospheric details, or events already covered in Prior Context.
+    Skip any passages that are empty, unclear, or lack significant content.
+    Write in short phrases, no more than 20; output must be a single line:`,
 
     debugMode: false,
 });
+
+// ─── Retry Configuration ─────────────────────────────────────────────
+
+const RETRY_CONFIG = {
+    maxRetries: 5,
+    baseDelay: 2000,
+    maxDelay: 60000,
+    backoffMultiplier: 2,
+    retryableStatuses: [429, 500, 502, 503, 504],
+};
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function parseRetryAfter(error) {
+    try {
+        const retryAfter = error?.response?.headers?.['retry-after']
+        || error?.retryAfter
+        || error?.data?.retry_after;
+        if (!retryAfter) return null;
+        const seconds = Number(retryAfter);
+        if (!isNaN(seconds)) return seconds * 1000;
+        const date = new Date(retryAfter);
+        if (!isNaN(date.getTime())) {
+            return Math.max(0, date.getTime() - Date.now());
+        }
+    } catch (e) { /* ignore */ }
+    return null;
+}
+
+function isRetryableError(error) {
+    if (error?.name === 'AbortError') return false;
+    if (error?.name === 'TypeError' && error?.message?.includes('fetch')) return true;
+    const status = error?.status || error?.response?.status || error?.statusCode;
+    if (status && RETRY_CONFIG.retryableStatuses.includes(status)) return true;
+    const msg = (error?.message || error?.toString() || '').toLowerCase();
+    if (msg.includes('rate limit')) return true;
+    if (msg.includes('too many requests')) return true;
+    if (msg.includes('server error')) return true;
+    if (msg.includes('timeout')) return true;
+    if (msg.includes('econnreset')) return true;
+    if (msg.includes('econnrefused')) return true;
+    if (msg.includes('network')) return true;
+    if (msg.includes('overloaded')) return true;
+    if (msg.includes('capacity')) return true;
+    return false;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -71,7 +119,7 @@ function getChatStore() {
     if (!chatMetadata[MODULE_NAME]) {
         chatMetadata[MODULE_NAME] = {
             layers: [],
-            summarizedUpTo: -1,  // chat index up to which we've already summarized
+            summarizedUpTo: -1,
         };
     }
     return chatMetadata[MODULE_NAME];
@@ -88,93 +136,52 @@ function getPlayerName() {
 
 // ─── Message Hiding (Ghosting) ───────────────────────────────────────
 
-/**
- * Hide a message from the LLM context using SillyTavern's /hide mechanism.
- * The message remains visible in the UI with a ghost icon.
- *
- * In SillyTavern, hidden messages have is_system = true internally,
- * which excludes them from the prompt context while keeping them in the UI.
- */
 function hideMessage(messageIndex) {
     const { chat } = SillyTavern.getContext();
     const msg = chat[messageIndex];
     if (!msg) return;
-
-    // Already hidden
     if (msg.is_system) return;
-
-    // Set the is_system flag — this is how ST hides messages from context
     msg.is_system = true;
-
-    // Update the UI to show the ghost icon
     const messageElement = document.querySelector(`#chat .mes[mesid="${messageIndex}"]`);
     if (messageElement) {
         messageElement.setAttribute('is_system', 'true');
     }
-
     log(`Hidden (ghosted) message at index ${messageIndex}`);
 }
 
-/**
- * Unhide a message, restoring it to the LLM context.
- */
 function unhideMessage(messageIndex) {
     const { chat } = SillyTavern.getContext();
     const msg = chat[messageIndex];
     if (!msg) return;
-
     msg.is_system = false;
-
     const messageElement = document.querySelector(`#chat .mes[mesid="${messageIndex}"]`);
     if (messageElement) {
         messageElement.setAttribute('is_system', 'false');
     }
-
     log(`Unhidden message at index ${messageIndex}`);
 }
 
-/**
- * Ghost all messages up to and including the given index.
- * Skips messages that are already system messages (narrator, etc.)
- * or that were originally user-hidden.
- */
 function ghostMessagesUpTo(endIndex) {
     const { chat } = SillyTavern.getContext();
-    const store = getChatStore();
-
     for (let i = 0; i <= endIndex; i++) {
         const msg = chat[i];
         if (!msg) continue;
-
-        // Skip the first message (greeting) — usually best to keep it
         if (i === 0) continue;
-
-        // Skip already-system messages (narrator messages, etc.)
-        // We only want to ghost regular user/assistant messages
         if (msg.is_system && !msg._sc_ghosted) continue;
-
-        // Mark as ghosted by us so we can unghost later if needed
         msg._sc_ghosted = true;
         hideMessage(i);
     }
-
     log(`Ghosted messages from index 1 to ${endIndex}`);
 }
 
 // ─── Assistant Turn Utilities ────────────────────────────────────────
 
-/**
- * Returns all assistant (character) turns as { index, mes, name } in order.
- * Counts both visible and ghosted assistant turns.
- */
 function getAssistantTurns(chat) {
     const turns = [];
     for (let i = 0; i < chat.length; i++) {
         const m = chat[i];
-        // Include ghosted messages that we ghosted (they were originally assistant messages)
         const isOurGhost = m._sc_ghosted === true;
         const isAssistant = !m.is_user && (!m.is_system || isOurGhost);
-
         if (isAssistant && m.mes && m.mes.trim().length > 0) {
             turns.push({ index: i, mes: m.mes, name: m.name || 'Assistant' });
         }
@@ -182,9 +189,6 @@ function getAssistantTurns(chat) {
     return turns;
 }
 
-/**
- * Returns only non-ghosted (visible to LLM) assistant turns.
- */
 function getVisibleAssistantTurns(chat) {
     const turns = [];
     for (let i = 0; i < chat.length; i++) {
@@ -196,10 +200,6 @@ function getVisibleAssistantTurns(chat) {
     return turns;
 }
 
-/**
- * Given a range of chat indices, build a readable passage including both
- * user and assistant messages for context.
- */
 function buildPassageFromRange(chat, startIdx, endIdx) {
     const lines = [];
     for (let i = startIdx; i <= endIdx; i++) {
@@ -214,48 +214,18 @@ function buildPassageFromRange(chat, startIdx, endIdx) {
 
 // ─── Prompt Toggle Management ────────────────────────────────────────
 
-/**
- * Get all prompt manager entries (the toggleable items in Chat Completion presets).
- * Returns the array of prompt entries from the active preset.
- */
-function getPromptManagerEntries() {
-    try {
-        const ctx = SillyTavern.getContext();
-        // The prompt manager stores entries in the active preset's prompt_manager_settings
-        if (ctx.promptManager) {
-            return ctx.promptManager.getPromptCollection()?.collection || [];
-        }
-        // Fallback: access via oai_settings
-        if (ctx.oai_settings?.prompt_manager_settings?.prompts) {
-            return ctx.oai_settings.prompt_manager_settings.prompts;
-        }
-    } catch (e) {
-        log('Could not access prompt manager entries:', e);
-    }
-    return [];
-}
-
-/**
- * Snapshot the current enabled/disabled state of all prompt toggles.
- * Returns a Map of identifier → boolean.
- */
 function snapshotPromptToggles() {
     const snapshot = new Map();
     try {
         const ctx = SillyTavern.getContext();
         const promptManager = ctx.promptManager;
-
         if (!promptManager) {
             log('No prompt manager available, skipping toggle snapshot.');
             return snapshot;
         }
-
         const collection = promptManager.getPromptCollection();
         if (!collection?.collection) return snapshot;
-
         for (const entry of collection.collection) {
-            // Each entry has an `identifier` and the toggle state is tracked
-            // via the prompt order list with `enabled` flags
             const orderList = promptManager.getPromptOrderEntries();
             if (orderList) {
                 for (const orderEntry of orderList) {
@@ -265,7 +235,6 @@ function snapshotPromptToggles() {
                 }
             }
         }
-
         log(`Snapshot captured: ${snapshot.size} prompt toggles`);
     } catch (e) {
         log('Error capturing snapshot:', e);
@@ -273,18 +242,13 @@ function snapshotPromptToggles() {
     return snapshot;
 }
 
-/**
- * Disable all prompt toggles (set enabled = false).
- */
 function disableAllPromptToggles() {
     try {
         const ctx = SillyTavern.getContext();
         const promptManager = ctx.promptManager;
         if (!promptManager) return;
-
         const orderList = promptManager.getPromptOrderEntries();
         if (!orderList) return;
-
         let count = 0;
         for (const entry of orderList) {
             if (entry.enabled) {
@@ -292,27 +256,20 @@ function disableAllPromptToggles() {
                 count++;
             }
         }
-
         log(`Disabled ${count} prompt toggles`);
     } catch (e) {
         log('Error disabling prompt toggles:', e);
     }
 }
 
-/**
- * Restore prompt toggles from a previous snapshot.
- */
 function restorePromptToggles(snapshot) {
     if (!snapshot || snapshot.size === 0) return;
-
     try {
         const ctx = SillyTavern.getContext();
         const promptManager = ctx.promptManager;
         if (!promptManager) return;
-
         const orderList = promptManager.getPromptOrderEntries();
         if (!orderList) return;
-
         let count = 0;
         for (const entry of orderList) {
             if (snapshot.has(entry.identifier)) {
@@ -320,20 +277,14 @@ function restorePromptToggles(snapshot) {
                 count++;
             }
         }
-
         log(`Restored ${count} prompt toggles`);
     } catch (e) {
         log('Error restoring prompt toggles:', e);
     }
 }
 
-// ─── Core: LLM Summarization ────────────────────────────────────────
+// ─── Core: LLM Summarization with Retry ──────────────────────────────
 
-/**
- * Call the LLM with our context-aware summarizer prompt.
- * Disables all Chat Completion prompt toggles for the duration of the call,
- * then restores them afterward — so only our system prompt + user prompt are sent.
- */
 async function callSummarizer(storyTxt, contextStr) {
     const { generateRaw } = SillyTavern.getContext();
     const s = getSettings();
@@ -347,69 +298,246 @@ async function callSummarizer(storyTxt, contextStr) {
     log('Context str length:', contextStr.length, 'chars');
     log('Story txt length:', storyTxt.length, 'chars');
 
-    // *** Snapshot and disable all prompt toggles ***
     const snapshot = snapshotPromptToggles();
     disableAllPromptToggles();
 
+    let lastError = null;
+
     try {
-        const result = await generateRaw({
-            systemPrompt: s.summarizerSystemPrompt,
-            prompt: prompt,
-        });
-        const trimmed = (result || '').trim();
-        log('Result:', trimmed);
-        return trimmed;
-    } catch (err) {
-        console.error(LOG_PREFIX, 'Summarization failed:', err);
-        toastr.error('Summaryception: summarization failed — check console.', '', { timeOut: 5000 });
+        for (let attempt = 0; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
+            try {
+                if (attempt > 0) {
+                    log(`Retry attempt ${attempt}/${RETRY_CONFIG.maxRetries}`);
+                }
+
+                const result = await generateRaw({
+                    systemPrompt: s.summarizerSystemPrompt,
+                    prompt: prompt,
+                });
+
+                const trimmed = (result || '').trim();
+
+                if (!trimmed) {
+                    log('Empty response from LLM, treating as retryable');
+                    throw new Error('Empty response from summarizer');
+                }
+
+                log('Result:', trimmed);
+                return trimmed;
+
+            } catch (err) {
+                lastError = err;
+
+                if (!isRetryableError(err)) {
+                    console.error(LOG_PREFIX, 'Non-retryable error:', err);
+                    break;
+                }
+
+                if (attempt >= RETRY_CONFIG.maxRetries) {
+                    console.error(LOG_PREFIX, `All ${RETRY_CONFIG.maxRetries} retries exhausted.`);
+                    break;
+                }
+
+                let delay;
+                const retryAfterMs = parseRetryAfter(err);
+                if (retryAfterMs) {
+                    delay = Math.min(retryAfterMs, RETRY_CONFIG.maxDelay);
+                    log(`Server requested retry after ${delay}ms`);
+                } else {
+                    const exponentialDelay = RETRY_CONFIG.baseDelay * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt);
+                    const jitter = Math.random() * RETRY_CONFIG.baseDelay;
+                    delay = Math.min(exponentialDelay + jitter, RETRY_CONFIG.maxDelay);
+                }
+
+                const delaySec = (delay / 1000).toFixed(1);
+                const status = err?.status || err?.response?.status || '?';
+
+                console.warn(LOG_PREFIX, `Attempt ${attempt + 1} failed (${status}). Retrying in ${delaySec}s...`, err.message || err);
+
+                toastr.warning(
+                    `API error (${status}). Retrying in ${delaySec}s... (${attempt + 1}/${RETRY_CONFIG.maxRetries})`,
+                               'Summaryception',
+                               { timeOut: delay }
+                );
+
+                await sleep(delay);
+            }
+        }
+
+        const status = lastError?.status || lastError?.response?.status || '';
+        console.error(LOG_PREFIX, 'Summarization failed after all retries:', lastError);
+        toastr.error(
+            `Summarization failed after ${RETRY_CONFIG.maxRetries} retries${status ? ` (${status})` : ''}. Batch skipped — will retry on next trigger.`,
+                     'Summaryception',
+                     { timeOut: 8000 }
+        );
         return '';
+
     } finally {
-        // *** ALWAYS restore, even if the call fails ***
         restorePromptToggles(snapshot);
     }
 }
+
+// ─── Core: Summarization State ───────────────────────────────────────
+
+let isSummarizing = false;
+let catchupDismissed = false;
 
 // ─── Core: Summarize Oldest Verbatim Turns ──────────────────────────
 
 async function maybeSummarizeTurns() {
     const s = getSettings();
     if (!s.enabled) return;
+    if (isSummarizing) return;
 
     const { chat } = SillyTavern.getContext();
     const store = getChatStore();
 
     const allAssistantTurns = getAssistantTurns(chat);
-
-    // Get visible turns, EXCLUDING index 0 (greeting/scenario — user manages that manually)
     const visibleTurns = allAssistantTurns.filter(t => t.index > 0 && !chat[t.index]._sc_ghosted);
 
     log(`Visible assistant turns (excluding turn 0): ${visibleTurns.length}, limit: ${s.verbatimTurns}`);
 
     if (visibleTurns.length <= s.verbatimTurns) return;
 
+    const overflow = visibleTurns.length - s.verbatimTurns;
+
+    // ─── Backlog detection ───────────────────────────────────────
+    const backlogThreshold = s.turnsPerSummary * 2;
+
+    if (overflow > backlogThreshold && !catchupDismissed) {
+        log(`Large backlog detected: ${overflow} turns over limit`);
+
+        const batchesNeeded = Math.ceil(overflow / s.turnsPerSummary);
+
+        const choice = await showCatchupDialog(overflow, batchesNeeded);
+
+        if (choice === 'skip') {
+            const cutoff = visibleTurns[visibleTurns.length - s.verbatimTurns - 1];
+            if (cutoff) {
+                store.summarizedUpTo = cutoff.index;
+                log(`Skipped backlog. summarizedUpTo set to ${store.summarizedUpTo}`);
+            }
+            catchupDismissed = true;
+            await saveChatStore();
+            return;
+
+        } else if (choice === 'catchup') {
+            await runCatchup(visibleTurns, overflow);
+            return;
+
+        } else if (choice === 'partial') {
+            await summarizeOneBatch(visibleTurns);
+            return;
+        }
+
+        return;
+    }
+
+    // ─── Normal operation: single batch ──────────────────────────
+    await summarizeOneBatch(visibleTurns);
+
+    // Check if there's still a small overflow (not a backlog)
+    const remaining = getAssistantTurns(chat).filter(t => t.index > 0 && !chat[t.index]._sc_ghosted);
+    if (remaining.length > s.verbatimTurns && remaining.length - s.verbatimTurns <= backlogThreshold) {
+        await maybeSummarizeTurns();
+    }
+}
+
+// ─── Core: Single Batch Summarization ────────────────────────────────
+
+async function summarizeOneBatch(visibleTurns) {
+    const s = getSettings();
+    const { chat } = SillyTavern.getContext();
+    const store = getChatStore();
+
     const batchSize = Math.min(s.turnsPerSummary, visibleTurns.length);
     const batch = visibleTurns.slice(0, batchSize);
 
-    if (batch.length === 0) return;
+    if (batch.length === 0) return false;
+
+    isSummarizing = true;
+
+    try {
+        const startIdx = batch[0].index;
+        const endIdx = batch[batch.length - 1].index;
+
+        log(`Summarizing ${batch.length} assistant turns (indices ${startIdx}–${endIdx})`);
+
+        const storyTxt = buildPassageFromRange(chat, startIdx, endIdx);
+        if (!storyTxt.trim()) return false;
+
+        if (!store.layers[0]) store.layers[0] = [];
+        const contextStr = store.layers[0].map(sn => sn.text).join(' | ');
+
+        toastr.info(`Summarizing ${batch.length} turn${batch.length > 1 ? 's' : ''}…`, 'Summaryception', {
+            timeOut: 3000,
+            progressBar: true,
+        });
+
+        const summary = await callSummarizer(storyTxt, contextStr);
+
+        if (!summary) {
+            log('Summarization failed for batch, leaving turns intact for next attempt.');
+            return false;
+        }
+
+        store.layers[0].push({
+            text: summary,
+            turnRange: [startIdx, endIdx],
+            timestamp: Date.now(),
+        });
+
+        store.summarizedUpTo = Math.max(store.summarizedUpTo, endIdx);
+        ghostMessagesUpTo(endIdx);
+
+        log(`Layer 0 now has ${store.layers[0].length} snippets`);
+
+        await maybePromoteLayer(0);
+        await saveChatStore();
+
+        try {
+            const ctx = SillyTavern.getContext();
+            if (ctx.saveChat) await ctx.saveChat();
+        } catch (e) {
+            log('Could not save chat:', e);
+        }
+
+        toastr.success(`Summary saved (Layer 0: ${store.layers[0].length} snippets)`, 'Summaryception', { timeOut: 2000 });
+        return true;
+
+    } finally {
+        isSummarizing = false;
+    }
+}
+
+// ─── Core: Inner Batch for Catchup (no isSummarizing toggle) ─────────
+
+async function summarizeOneBatchFromTurns(visibleTurns) {
+    const s = getSettings();
+    const { chat } = SillyTavern.getContext();
+    const store = getChatStore();
+
+    const batchSize = Math.min(s.turnsPerSummary, visibleTurns.length);
+    const batch = visibleTurns.slice(0, batchSize);
+
+    if (batch.length === 0) return false;
 
     const startIdx = batch[0].index;
     const endIdx = batch[batch.length - 1].index;
 
-    log(`Summarizing ${batch.length} assistant turns (indices ${startIdx}–${endIdx})`);
-
     const storyTxt = buildPassageFromRange(chat, startIdx, endIdx);
-    if (!storyTxt.trim()) return;
+    if (!storyTxt.trim()) return false;
 
     if (!store.layers[0]) store.layers[0] = [];
     const contextStr = store.layers[0].map(sn => sn.text).join(' | ');
 
-    toastr.info(`Summarizing ${batch.length} turn${batch.length > 1 ? 's' : ''}…`, 'Summaryception', {
-        timeOut: 3000,
-        progressBar: true,
-    });
-
     const summary = await callSummarizer(storyTxt, contextStr);
-    if (!summary) return;
+
+    if (!summary) {
+        log('Summarization failed for batch, leaving turns intact for next attempt.');
+        return false;
+    }
 
     store.layers[0].push({
         text: summary,
@@ -418,11 +546,7 @@ async function maybeSummarizeTurns() {
     });
 
     store.summarizedUpTo = Math.max(store.summarizedUpTo, endIdx);
-
-    // Ghost the summarized messages (ghostMessagesUpTo already skips index 0)
     ghostMessagesUpTo(endIdx);
-
-    log(`Layer 0 now has ${store.layers[0].length} snippets`);
 
     await maybePromoteLayer(0);
     await saveChatStore();
@@ -434,14 +558,152 @@ async function maybeSummarizeTurns() {
         log('Could not save chat:', e);
     }
 
-    toastr.success(`Summary saved (Layer 0: ${store.layers[0].length} snippets)`, 'Summaryception', { timeOut: 2000 });
+    return true;
+}
 
-    // Check if still over the limit
-    const remainingVisible = allAssistantTurns.filter(t => t.index > 0 && !chat[t.index]._sc_ghosted).length;
-    if (remainingVisible > s.verbatimTurns) {
-        log(`Still ${remainingVisible} visible turns (limit ${s.verbatimTurns}), running again…`);
-        await maybeSummarizeTurns();
+// ─── Core: Catchup Processing ────────────────────────────────────────
+
+async function runCatchup(visibleTurns, overflow) {
+    const s = getSettings();
+    const totalBatches = Math.ceil(overflow / s.turnsPerSummary);
+    let completed = 0;
+    let failed = 0;
+    let cancelled = false;
+
+    const progressToast = toastr.info(
+        `Processing backlog: 0 / ${totalBatches} batches (0%)`,
+                                      'Summaryception Catch-Up',
+                                      {
+                                          timeOut: 0,
+                                          extendedTimeOut: 0,
+                                          tapToDismiss: false,
+                                          closeButton: true,
+                                          onCloseClick: () => { cancelled = true; },
+                                      }
+    );
+
+    isSummarizing = true;
+
+    try {
+        let consecutiveFailures = 0;
+
+        while (!cancelled) {
+            const { chat } = SillyTavern.getContext();
+            const allAssistantTurns = getAssistantTurns(chat);
+            const currentVisible = allAssistantTurns.filter(t => t.index > 0 && !chat[t.index]._sc_ghosted);
+
+            if (currentVisible.length <= s.verbatimTurns) break;
+
+            const success = await summarizeOneBatchFromTurns(currentVisible);
+
+            if (success) {
+                completed++;
+                consecutiveFailures = 0;
+            } else {
+                failed++;
+                consecutiveFailures++;
+
+                if (consecutiveFailures >= 3) {
+                    toastr.error(
+                        `3 consecutive failures — API may be down. Pausing catch-up. Progress saved; will resume on next message.`,
+                        'Summaryception',
+                        { timeOut: 8000 }
+                    );
+                    break;
+                }
+            }
+
+            const pct = Math.round((completed / totalBatches) * 100);
+            const failStr = failed > 0 ? ` | ${failed} failed` : '';
+            $(progressToast).find('.toast-message').text(
+                `Processing: ${completed} / ${totalBatches} batches (${pct}%)${failStr}\nClick ✕ to pause`
+            );
+
+            await new Promise(r => setTimeout(r, 200));
+        }
+
+        toastr.clear(progressToast);
+
+        if (cancelled) {
+            toastr.warning(
+                `Catch-up paused at ${completed}/${totalBatches}. Progress saved — will continue on next message.`,
+                'Summaryception',
+                { timeOut: 5000 }
+            );
+        } else if (failed === 0) {
+            toastr.success(
+                `Catch-up complete! ${completed} batches processed.`,
+                'Summaryception',
+                { timeOut: 4000 }
+            );
+        } else {
+            toastr.warning(
+                `Catch-up finished. ${completed} succeeded, ${failed} failed (will retry on next trigger).`,
+                           'Summaryception',
+                           { timeOut: 6000 }
+            );
+        }
+
+        updateUI();
+
+    } finally {
+        isSummarizing = false;
     }
+}
+
+// ─── Catch-Up Dialog ─────────────────────────────────────────────────
+
+async function showCatchupDialog(overflowCount, estimatedCalls) {
+    return new Promise((resolve) => {
+        const dialogHtml = `
+        <div class="sc-catchup-dialog">
+        <p>Summaryception detected <strong>${overflowCount} unsummarized turns</strong>
+        in this chat (beyond your ${getSettings().verbatimTurns} verbatim limit).</p>
+        <p>This will require approximately <strong>${estimatedCalls} summarizer calls</strong> to process.</p>
+        <hr>
+        <div class="sc-catchup-options">
+        <button id="sc_catchup_full" class="menu_button">
+        <i class="fa-solid fa-forward-fast"></i>
+        Process Entire Backlog
+        <small>Summarize all ${overflowCount} turns (cancelable)</small>
+        </button>
+        <button id="sc_catchup_skip" class="menu_button">
+        <i class="fa-solid fa-forward-step"></i>
+        Skip Backlog
+        <small>Ignore old turns, only summarize new ones going forward</small>
+        </button>
+        <button id="sc_catchup_partial" class="menu_button">
+        <i class="fa-solid fa-play"></i>
+        Just One Batch
+        <small>Summarize ${getSettings().turnsPerSummary} turns now, deal with the rest later</small>
+        </button>
+        </div>
+        </div>
+        `;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'sc-catchup-overlay';
+        overlay.innerHTML = `
+        <div class="sc-catchup-modal">
+        <h3>🧠 Summaryception — Backlog Detected</h3>
+        ${dialogHtml}
+        </div>
+        `;
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('#sc_catchup_full').addEventListener('click', () => {
+            overlay.remove();
+            resolve('catchup');
+        });
+        overlay.querySelector('#sc_catchup_skip').addEventListener('click', () => {
+            overlay.remove();
+            resolve('skip');
+        });
+        overlay.querySelector('#sc_catchup_partial').addEventListener('click', () => {
+            overlay.remove();
+            resolve('partial');
+        });
+    });
 }
 
 // ─── Core: Layer Promotion ("ception") ──────────────────────────────
@@ -505,8 +767,8 @@ function assembleSummaryBlock() {
         if (!layer || layer.length === 0) continue;
 
         const layerLabel = i === 0
-            ? 'Recent Events'
-            : `Deep Memory L${i}`;
+        ? 'Recent Events'
+        : `Deep Memory L${i}`;
         const snippets = layer.map(sn => sn.text).join(' | ');
         parts.push(`[${layerLabel}]: ${snippets}`);
     }
@@ -519,12 +781,6 @@ function assembleSummaryBlock() {
 
 // ─── Injection via setExtensionPrompt ────────────────────────────────
 
-/**
- * Instead of manipulating the chat array at generation time, we use
- * SillyTavern's setExtensionPrompt to cleanly inject the summary block
- * into the prompt at a configurable depth. This is the recommended
- * approach for extensions.
- */
 function updateInjection() {
     const { setExtensionPrompt } = SillyTavern.getContext();
     const s = getSettings();
@@ -540,11 +796,7 @@ function updateInjection() {
         return;
     }
 
-    // Inject in-chat (position=1) at a depth just behind the verbatim turns
-    // depth = verbatimTurns means it goes right before the oldest kept message
     const depth = s.verbatimTurns;
-
-    // position: 1 = IN_CHAT, role: 0 = SYSTEM
     setExtensionPrompt(MODULE_NAME, summaryBlock, 1, depth, false, 0);
 
     log(`Injection updated: ${summaryBlock.length} chars at depth ${depth}`);
@@ -567,6 +819,7 @@ function onMessageReceived(messageIndex) {
 
 function onChatChanged() {
     log('Chat changed.');
+    catchupDismissed = false;
     setTimeout(() => {
         updateInjection();
         updateUI();
@@ -574,7 +827,6 @@ function onChatChanged() {
 }
 
 function onGenerationStarted() {
-    // Refresh the injection right before generation
     updateInjection();
 }
 
@@ -612,7 +864,6 @@ function registerSlashCommands() {
             name: 'sc-clear',
             callback: async () => {
                 const store = getChatStore();
-                // Unghost all messages we ghosted
                 const { chat } = SillyTavern.getContext();
                 for (let i = 0; i < chat.length; i++) {
                     if (chat[i]._sc_ghosted) {
@@ -664,14 +915,12 @@ function updateUI() {
     $('#sc_summarizer_user_prompt').val(s.summarizerUserPrompt);
     $('#sc_debug_mode').prop('checked', s.debugMode);
 
-    // Count ghosted messages
     let ghostedCount = 0;
     try {
         const { chat } = SillyTavern.getContext();
         ghostedCount = chat.filter(m => m._sc_ghosted).length;
     } catch (e) { /* no chat loaded */ }
 
-    // Layer stats
     let statsHtml = '';
     statsHtml += `<div class="sc-layer-stat">👻 <strong>${ghostedCount}</strong> messages ghosted (hidden from LLM, visible to you)</div>`;
     if (store.layers) {
@@ -680,8 +929,8 @@ function updateUI() {
             if (layer && layer.length > 0) {
                 const label = i === 0 ? 'Layer 0 (turn summaries)' : `Layer ${i} (depth ${i} meta)`;
                 statsHtml += `<div class="sc-layer-stat">
-                    <span class="sc-layer-label">${label}:</span>
-                    <strong>${layer.length}</strong> / ${s.snippetsPerLayer} snippets
+                <span class="sc-layer-label">${label}:</span>
+                <strong>${layer.length}</strong> / ${s.snippetsPerLayer} snippets
                 </div>`;
             }
         }
@@ -692,11 +941,9 @@ function updateUI() {
     }
     $('#sc_layer_stats').html(statsHtml);
 
-    // Preview
     const preview = assembleSummaryBlock();
     $('#sc_preview').val(preview || '(empty — no summaries yet)');
 
-    // Snippet browser
     updateSnippetBrowser();
 }
 
@@ -715,14 +962,14 @@ function updateSnippetBrowser() {
             for (let j = 0; j < layer.length; j++) {
                 const sn = layer[j];
                 const rangeStr = sn.turnRange
-                    ? `turns ${sn.turnRange[0]}–${sn.turnRange[1]}`
-                    : sn.mergedCount
-                        ? `merged ${sn.mergedCount} from L${sn.fromLayer}`
-                        : '';
+                ? `turns ${sn.turnRange[0]}–${sn.turnRange[1]}`
+                : sn.mergedCount
+                ? `merged ${sn.mergedCount} from L${sn.fromLayer}`
+                : '';
                 html += `<div class="sc-snippet" data-layer="${i}" data-idx="${j}">
-                    <span class="sc-snippet-text">${escapeHtml(sn.text)}</span>
-                    <span class="sc-snippet-meta">${rangeStr}</span>
-                    <button class="sc-snippet-delete menu_button fa-solid fa-xmark" title="Delete this snippet"></button>
+                <span class="sc-snippet-text">${escapeHtml(sn.text)}</span>
+                <span class="sc-snippet-meta">${rangeStr}</span>
+                <button class="sc-snippet-delete menu_button fa-solid fa-xmark" title="Delete this snippet"></button>
                 </div>`;
             }
             html += '</div>';
@@ -772,7 +1019,7 @@ function bindUIEvents() {
             getSettings()[sl.key] = val;
             $(sl.display).text(val);
             saveSettings();
-            updateInjection(); // Re-inject at new depth if verbatimTurns changed
+            updateInjection();
         });
     }
 
@@ -797,7 +1044,6 @@ function bindUIEvents() {
     $('#sc_clear_memory').on('click', async function () {
         if (!confirm('Clear ALL Summaryception memory for this chat and unghost all messages?')) return;
         const store = getChatStore();
-        // Unghost everything
         const { chat } = SillyTavern.getContext();
         for (let i = 0; i < chat.length; i++) {
             if (chat[i]._sc_ghosted) {
@@ -831,7 +1077,6 @@ function bindUIEvents() {
 
     $('#sc_refresh_preview').on('click', () => updateUI());
 
-    // Export / Import
     $('#sc_export').on('click', function () {
         const store = getChatStore();
         const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
