@@ -140,60 +140,55 @@ async function ghostMessage(messageIndex) {
 
     msg.extra.sc_ghosted = true;
 
-    await SillyTavern.getContext().executeSlashCommandsWithOptions(`/hide ${messageIndex}`);
-
-    log(`Ghosted message at index ${messageIndex}`);
-}
-
-async function unghostMessage(messageIndex) {
-    const { chat } = SillyTavern.getContext();
-    const msg = chat[messageIndex];
-    if (!msg) return;
-    if (msg.extra) delete msg.extra.sc_ghosted;
-
-    await SillyTavern.getContext().executeSlashCommandsWithOptions(`/unhide ${messageIndex}`);
-
-    log(`Unghosted message at index ${messageIndex}`);
-}
-
-async function ghostMessagesUpTo(endIndex) {
-    const { chat } = SillyTavern.getContext();
-
-    // Mark all our messages first
-    for (let i = 1; i <= endIndex; i++) {
-        const msg = chat[i];
-        if (!msg) continue;
-        if (msg.is_system && !msg.extra?.sc_ghosted) continue;
-        if (!msg.extra) msg.extra = {};
-        msg.extra.sc_ghosted = true;
+    try {
+        await SillyTavern.getContext().executeSlashCommandsWithOptions(`/hide ${messageIndex}`, { showOutput: false });
+    } catch (e) {
+        log(`Failed to hide message ${messageIndex}:`, e);
     }
 
-    // Use range hide for efficiency
-    await SillyTavern.getContext().executeSlashCommandsWithOptions(`/hide 1-${endIndex}`);
-
-    log(`Ghosted messages from index 1 to ${endIndex}`);
+    log(`Ghosted message at index ${messageIndex}`);
 }
 
 async function unghostAllMessages() {
     const { chat } = SillyTavern.getContext();
 
-    // Clear our tracking flags
     for (let i = 0; i < chat.length; i++) {
         if (chat[i]?.extra?.sc_ghosted) {
             delete chat[i].extra.sc_ghosted;
         }
     }
 
-    // Unhide ALL messages — /unhide on non-hidden messages is harmless
     for (let i = 0; i < chat.length; i++) {
         try {
-            await SillyTavern.getContext().executeSlashCommandsWithOptions(`/unhide ${i}`);
+            await SillyTavern.getContext().executeSlashCommandsWithOptions(`/unhide ${i}`, { showOutput: false });
         } catch (e) {
             log(`Failed to unhide message ${i}:`, e);
         }
     }
 
     log(`Unghosted all ${chat.length} messages`);
+}
+
+async function ghostMessagesUpTo(endIndex) {
+    const { chat } = SillyTavern.getContext();
+
+    for (let i = 1; i <= endIndex; i++) {
+        const msg = chat[i];
+        if (!msg) continue;
+        if (msg.is_system && !msg.extra?.sc_ghosted) continue;
+        if (!msg.extra) msg.extra = {};
+        if (msg.extra.sc_ghosted) continue;
+
+        msg.extra.sc_ghosted = true;
+
+        try {
+            await SillyTavern.getContext().executeSlashCommandsWithOptions(`/hide ${i}`, { showOutput: false });
+        } catch (e) {
+            log(`Failed to hide message ${i}:`, e);
+        }
+    }
+
+    log(`Ghosted messages from index 1 to ${endIndex}`);
 }
 
 // ─── Assistant Turn Utilities ────────────────────────────────────────
