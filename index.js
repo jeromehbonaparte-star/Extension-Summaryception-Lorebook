@@ -138,12 +138,8 @@ function ghostMessage(messageIndex) {
     if (!msg.extra) msg.extra = {};
     if (msg.extra.sc_ghosted) return;
 
-    // Our persistent tracking flag
+    // Persistent tracking flag only — no is_hidden here
     msg.extra.sc_ghosted = true;
-
-    // SillyTavern's native hidden flag — excludes from context building
-    // This is what /hide command sets internally
-    msg.is_hidden = true;
 
     // Visual indicator
     const messageElement = document.querySelector(`#chat .mes[mesid="${messageIndex}"]`);
@@ -161,8 +157,8 @@ function unghostMessage(messageIndex) {
 
     if (msg.extra) delete msg.extra.sc_ghosted;
 
-    // Remove the hidden flag
-    msg.is_hidden = false;
+    // Clean up is_hidden in case it was set by generation interceptor
+    delete msg.is_hidden;
 
     const messageElement = document.querySelector(`#chat .mes[mesid="${messageIndex}"]`);
     if (messageElement) {
@@ -178,7 +174,6 @@ function ghostMessagesUpTo(endIndex) {
         const msg = chat[i];
         if (!msg) continue;
         if (i === 0) continue;
-        // Skip real system messages that we didn't ghost
         if (msg.is_system && !msg.extra?.sc_ghosted) continue;
         ghostMessage(i);
     }
@@ -192,11 +187,7 @@ function applyGhostVisuals() {
         for (let i = 0; i < chat.length; i++) {
             const isGhosted = chat[i]?.extra?.sc_ghosted === true;
 
-            // Re-apply is_hidden on load in case chat was reloaded
-            if (isGhosted) {
-                chat[i].is_hidden = true;
-            }
-
+            // DO NOT set is_hidden here — only visual CSS class
             const messageElement = document.querySelector(`#chat .mes[mesid="${i}"]`);
             if (!messageElement) continue;
             if (isGhosted) {
@@ -208,6 +199,31 @@ function applyGhostVisuals() {
     } catch (e) {
         log('applyGhostVisuals error:', e);
     }
+}
+
+function setupGhostObserver() {
+    const chatContainer = document.querySelector('#chat');
+    if (!chatContainer) {
+        setTimeout(setupGhostObserver, 500);
+        return;
+    }
+    const observer = new MutationObserver((mutations) => {
+        let hasNewMessages = false;
+        for (const mutation of mutations) {
+            if (mutation.addedNodes.length > 0) {
+                hasNewMessages = true;
+                break;
+            }
+        }
+        if (hasNewMessages) {
+            applyGhostVisuals();
+        }
+    });
+    observer.observe(chatContainer, {
+        childList: true,
+        subtree: false,
+    });
+    log('Ghost visual observer attached to #chat');
 }
 
 // ─── Generation Interceptor ─────────────────────────────────────────
@@ -226,12 +242,40 @@ function setupGenerationInterceptor() {
         for (let i = 0; i < chat.length; i++) {
             const msg = chat[i];
             if (msg?.extra?.sc_ghosted) {
-                if (!msg.extra) msg.extra = {};
-                msg.extra.isSmallSys = true;
+                // Set is_hidden RIGHT before generation — this excludes from context
+                msg.is_hidden = true;
             }
         }
 
-        log('Generation interceptor: marked ghosted messages for exclusion');
+        log('Generation interceptor: applied is_hidden to ghosted messages');
+    });
+
+    // Clean up is_hidden AFTER generation so it doesn't persist to disk
+    eventSource.on(event_types.GENERATION_ENDED, () => {
+        const { chat } = SillyTavern.getContext();
+        if (!chat) return;
+
+        for (let i = 0; i < chat.length; i++) {
+            const msg = chat[i];
+            if (msg?.extra?.sc_ghosted && msg.is_hidden) {
+                delete msg.is_hidden;
+            }
+        }
+
+        log('Generation interceptor: cleaned up is_hidden flags');
+    });
+
+    // Also clean up on generation stopped/aborted
+    eventSource.on(event_types.GENERATION_STOPPED, () => {
+        const { chat } = SillyTavern.getContext();
+        if (!chat) return;
+
+        for (let i = 0; i < chat.length; i++) {
+            const msg = chat[i];
+            if (msg?.extra?.sc_ghosted && msg.is_hidden) {
+                delete msg.is_hidden;
+            }
+        }
     });
 }
 
