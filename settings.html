@@ -14,106 +14,27 @@
                 </label>
             </div>
 
-            <hr class="sc-divider" />
-
-            <!-- ═══ Turn Settings ═══ -->
-            <h4 class="sc-section-title">📖 Verbatim Turn Settings</h4>
-
-            <div class="sc-row">
-                <label for="sc_verbatim_turns">
-                    <span>Verbatim Assistant Turns to Keep</span>
-                    <small class="sc-hint">Recent assistant turns sent word-for-word. Older ones are summarized.</small>
-                </label>
-                <div class="sc-slider-row">
-                    <input type="range" id="sc_verbatim_turns" min="1" max="50" step="1" />
-                    <span id="sc_verbatim_turns_val" class="sc-val">7</span>
-                </div>
-            </div>
-
-            <div class="sc-row">
-                <label for="sc_turns_per_summary">
-                    <span>Turns per Summary Batch</span>
-                    <small class="sc-hint">When limit is exceeded, this many oldest turns are summarized together into one snippet.</small>
-                </label>
-                <div class="sc-slider-row">
-                    <input type="range" id="sc_turns_per_summary" min="1" max="20" step="1" />
-                    <span id="sc_turns_per_summary_val" class="sc-val">3</span>
-                </div>
+            <!-- ═══ Actions ═══ -->
+            <div class="sc-button-row">
+                <button id="sc_force_summarize" class="menu_button">
+                    <i class="fa-solid fa-bolt"></i> Force Summarize Now
+                </button>
+                <button id="sc_export" class="menu_button">
+                    <i class="fa-solid fa-download"></i> Export Memory
+                </button>
+                <button id="sc_import" class="menu_button">
+                    <i class="fa-solid fa-upload"></i> Import Memory
+                </button>
+                <button id="sc_clear_memory" class="menu_button menu_button_danger">
+                    <i class="fa-solid fa-trash"></i> Clear Memory
+                </button>
             </div>
 
             <hr class="sc-divider" />
 
-            <!-- ═══ Layer Settings ═══ -->
-            <h4 class="sc-section-title">🔄 Layer Settings (the "ception")</h4>
-
-            <div class="sc-row">
-                <label for="sc_snippets_per_layer">
-                    <span>Max Snippets per Layer</span>
-                    <small class="sc-hint">When exceeded, oldest snippets are promoted (re-summarized) into a deeper layer.</small>
-                </label>
-                <div class="sc-slider-row">
-                    <input type="range" id="sc_snippets_per_layer" min="3" max="100" step="1" />
-                    <span id="sc_snippets_per_layer_val" class="sc-val">20</span>
-                </div>
-            </div>
-
-            <div class="sc-row">
-                <label for="sc_snippets_per_promotion">
-                    <span>Snippets per Promotion</span>
-                    <small class="sc-hint">How many oldest snippets merge together when promoting to the next layer.</small>
-                </label>
-                <div class="sc-slider-row">
-                    <input type="range" id="sc_snippets_per_promotion" min="2" max="20" step="1" />
-                    <span id="sc_snippets_per_promotion_val" class="sc-val">2</span>
-                </div>
-            </div>
-
-            <div class="sc-row">
-                <label for="sc_max_layers">
-                    <span>Maximum Layer Depth</span>
-                    <small class="sc-hint">How many recursive layers of summarization are allowed.</small>
-                </label>
-                <div class="sc-slider-row">
-                    <input type="range" id="sc_max_layers" min="1" max="10" step="1" />
-                    <span id="sc_max_layers_val" class="sc-val">5</span>
-                </div>
-            </div>
-
-            <hr class="sc-divider" />
-
-            <!-- ═══ Layer Stats ═══ -->
-            <h4 class="sc-section-title">📊 Layer Stats (Current Chat)</h4>
-            <div id="sc_layer_stats" class="sc-stats-box"></div>
-
-            <hr class="sc-divider" />
-
-            <!-- ═══ Prompts ═══ -->
-            <h4 class="sc-section-title">✏️ Summarizer Prompts</h4>
-
-            <div class="sc-row">
-                <label for="sc_summarizer_system_prompt">
-                    <span>System Prompt</span>
-                </label>
-                <textarea id="sc_summarizer_system_prompt" class="text_pole sc-textarea" rows="3"></textarea>
-            </div>
-
-            <div class="sc-row">
-                <label for="sc_summarizer_user_prompt">
-                    <span>User Prompt (Turn → Snippet & Layer Promotion)</span>
-                    <small class="sc-hint">
-                        Variables: <code>{{player_name}}</code> <code>{{context_str}}</code> (that layer's existing snippets) <code>{{story_txt}}</code> (passage to summarize)
-                    </small>
-                </label>
-                <textarea id="sc_summarizer_user_prompt" class="text_pole sc-textarea sc-textarea-tall" rows="10"></textarea>
-            </div>
-
-            <div class="sc-row">
-                <label for="sc_injection_template">
-                    <span>Injection Wrapper Template</span>
-                    <small class="sc-hint">Wraps the assembled block. Use <code>{{summary}}</code> for the combined text.</small>
-                </label>
-                <textarea id="sc_injection_template" class="text_pole sc-textarea" rows="3"></textarea>
-            </div>
+            <!-- ═══ Snippet Browser ═══ -->
+            <h4 class="sc-section-title">🗂️ Snippet Browser</h4>
+            <div id="sc_snippet_browser" class="sc-snippet-browser"></div>
 
             <hr class="sc-divider" />
 
@@ -128,43 +49,135 @@
 
             <hr class="sc-divider" />
 
-            <!-- ═══ Snippet Browser ═══ -->
-            <h4 class="sc-section-title">🗂️ Snippet Browser</h4>
-            <div id="sc_snippet_browser" class="sc-snippet-browser"></div>
+            <!-- ═══ Layer Stats ═══ -->
+            <h4 class="sc-section-title">📊 Layer Stats</h4>
+            <div id="sc_layer_stats" class="sc-stats-box"></div>
 
             <hr class="sc-divider" />
 
-            <!-- ═══ Actions ═══ -->
-            <h4 class="sc-section-title">⚙️ Actions</h4>
+            <!-- ═══ Advanced Settings ═══ -->
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>⚙️ Advanced Settings</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
 
-            <div class="sc-row">
-                <label class="checkbox_label" for="sc_debug_mode">
-                    <input type="checkbox" id="sc_debug_mode" />
-                    <span>Debug Mode (verbose console logs)</span>
-                </label>
-            </div>
+                    <!-- Turn Settings -->
+                    <h4 class="sc-section-title">📖 Verbatim Turn Settings</h4>
 
-            <div class="sc-row">
-                <label for="sc_strip_patterns">
-                    <span>Strip Patterns (one per line)</span>
-                    <small class="sc-hint">Tags and prefixes to remove from summarizer output. Handles reasoning model artifacts.</small>
-                </label>
-                <textarea id="sc_strip_patterns" class="text_pole sc-textarea" rows="4"></textarea>
-            </div>
+                    <div class="sc-row">
+                        <label for="sc_verbatim_turns">
+                            <span>Verbatim Assistant Turns to Keep</span>
+                            <small class="sc-hint">Recent assistant turns sent word-for-word. Older ones are summarized.</small>
+                        </label>
+                        <div class="sc-slider-row">
+                            <input type="range" id="sc_verbatim_turns" min="1" max="50" step="1" />
+                            <span id="sc_verbatim_turns_val" class="sc-val">7</span>
+                        </div>
+                    </div>
 
-            <div class="sc-button-row">
-                <button id="sc_force_summarize" class="menu_button">
-                    <i class="fa-solid fa-bolt"></i> Force Summarize Now
-                </button>
-                <button id="sc_export" class="menu_button">
-                    <i class="fa-solid fa-download"></i> Export Memory
-                </button>
-                <button id="sc_import" class="menu_button">
-                    <i class="fa-solid fa-upload"></i> Import Memory
-                </button>
-                <button id="sc_clear_memory" class="menu_button menu_button_danger">
-                    <i class="fa-solid fa-trash"></i> Clear Memory
-                </button>
+                    <div class="sc-row">
+                        <label for="sc_turns_per_summary">
+                            <span>Turns per Summary Batch</span>
+                            <small class="sc-hint">When limit is exceeded, this many oldest turns are summarized together into one snippet.</small>
+                        </label>
+                        <div class="sc-slider-row">
+                            <input type="range" id="sc_turns_per_summary" min="1" max="20" step="1" />
+                            <span id="sc_turns_per_summary_val" class="sc-val">3</span>
+                        </div>
+                    </div>
+
+                    <hr class="sc-divider" />
+
+                    <!-- Layer Settings -->
+                    <h4 class="sc-section-title">🔄 Layer Settings (the "ception")</h4>
+
+                    <div class="sc-row">
+                        <label for="sc_snippets_per_layer">
+                            <span>Max Snippets per Layer</span>
+                            <small class="sc-hint">When exceeded, oldest snippets are promoted (re-summarized) into a deeper layer.</small>
+                        </label>
+                        <div class="sc-slider-row">
+                            <input type="range" id="sc_snippets_per_layer" min="3" max="100" step="1" />
+                            <span id="sc_snippets_per_layer_val" class="sc-val">20</span>
+                        </div>
+                    </div>
+
+                    <div class="sc-row">
+                        <label for="sc_snippets_per_promotion">
+                            <span>Snippets per Promotion</span>
+                            <small class="sc-hint">How many oldest snippets merge together when promoting to the next layer.</small>
+                        </label>
+                        <div class="sc-slider-row">
+                            <input type="range" id="sc_snippets_per_promotion" min="2" max="20" step="1" />
+                            <span id="sc_snippets_per_promotion_val" class="sc-val">2</span>
+                        </div>
+                    </div>
+
+                    <div class="sc-row">
+                        <label for="sc_max_layers">
+                            <span>Maximum Layer Depth</span>
+                            <small class="sc-hint">How many recursive layers of summarization are allowed.</small>
+                        </label>
+                        <div class="sc-slider-row">
+                            <input type="range" id="sc_max_layers" min="1" max="10" step="1" />
+                            <span id="sc_max_layers_val" class="sc-val">5</span>
+                        </div>
+                    </div>
+
+                    <hr class="sc-divider" />
+
+                    <!-- Prompts -->
+                    <h4 class="sc-section-title">✏️ Summarizer Prompts</h4>
+
+                    <div class="sc-row">
+                        <label for="sc_summarizer_system_prompt">
+                            <span>System Prompt</span>
+                        </label>
+                        <textarea id="sc_summarizer_system_prompt" class="text_pole sc-textarea" rows="3"></textarea>
+                    </div>
+
+                    <div class="sc-row">
+                        <label for="sc_summarizer_user_prompt">
+                            <span>User Prompt (Turn → Snippet & Layer Promotion)</span>
+                            <small class="sc-hint">
+                                Variables: <code>{{player_name}}</code> <code>{{context_str}}</code> (that layer's existing snippets) <code>{{story_txt}}</code> (passage to summarize)
+                            </small>
+                        </label>
+                        <textarea id="sc_summarizer_user_prompt" class="text_pole sc-textarea sc-textarea-tall" rows="10"></textarea>
+                    </div>
+
+                    <div class="sc-row">
+                        <label for="sc_injection_template">
+                            <span>Injection Wrapper Template</span>
+                            <small class="sc-hint">Wraps the assembled block. Use <code>{{summary}}</code> for the combined text.</small>
+                        </label>
+                        <textarea id="sc_injection_template" class="text_pole sc-textarea" rows="3"></textarea>
+                    </div>
+
+                    <hr class="sc-divider" />
+
+                    <!-- Strip Patterns -->
+                    <div class="sc-row">
+                        <label for="sc_strip_patterns">
+                            <span>Strip Patterns (one per line)</span>
+                            <small class="sc-hint">Tags and prefixes to remove from summarizer output. Handles reasoning model artifacts.</small>
+                        </label>
+                        <textarea id="sc_strip_patterns" class="text_pole sc-textarea" rows="4"></textarea>
+                    </div>
+
+                    <hr class="sc-divider" />
+
+                    <!-- Debug -->
+                    <div class="sc-row">
+                        <label class="checkbox_label" for="sc_debug_mode">
+                            <input type="checkbox" id="sc_debug_mode" />
+                            <span>Debug Mode (verbose console logs)</span>
+                        </label>
+                    </div>
+
+                </div>
             </div>
 
         </div>
