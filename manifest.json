@@ -5,8 +5,8 @@
     "optional": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "Summaryception",
-    "version": "3.0.0",
-    "homePage": "https://github.com/Lodactio/summaryception",
+    "author": "Lodactio",
+    "version": "3.3.0",
+    "homePage": "https://github.com/Lodactio/Extension-Summaryception",
     "auto_update": true
 }
