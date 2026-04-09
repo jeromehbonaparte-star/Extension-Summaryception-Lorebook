@@ -137,23 +137,41 @@ function ghostMessage(messageIndex) {
     if (!msg) return;
     if (!msg.extra) msg.extra = {};
     if (msg.extra.sc_ghosted) return;
+
+    // Persistent flag (our tracking)
     msg.extra.sc_ghosted = true;
+
+    // Method 1: is_system flag (works on many ST versions)
+    msg.is_system = true;
+
+    // Method 2: CSS class for visual indicator
     const messageElement = document.querySelector(`#chat .mes[mesid="${messageIndex}"]`);
     if (messageElement) {
         messageElement.classList.add('sc-ghosted');
+        messageElement.setAttribute('is_system', 'true');
     }
+
     log(`Ghosted message at index ${messageIndex}`);
 }
 
 function unghostMessage(messageIndex) {
     const { chat } = SillyTavern.getContext();
     const msg = chat[messageIndex];
-    if (!msg || !msg.extra) return;
-    delete msg.extra.sc_ghosted;
+    if (!msg) return;
+
+    // Clear our tracking flag
+    if (msg.extra) delete msg.extra.sc_ghosted;
+
+    // Restore is_system
+    msg.is_system = false;
+
+    // Clear visuals
     const messageElement = document.querySelector(`#chat .mes[mesid="${messageIndex}"]`);
     if (messageElement) {
         messageElement.classList.remove('sc-ghosted');
+        messageElement.setAttribute('is_system', 'false');
     }
+
     log(`Unghosted message at index ${messageIndex}`);
 }
 
@@ -163,6 +181,7 @@ function ghostMessagesUpTo(endIndex) {
         const msg = chat[i];
         if (!msg) continue;
         if (i === 0) continue;
+        // Skip real system messages that we didn't ghost
         if (msg.is_system && !msg.extra?.sc_ghosted) continue;
         ghostMessage(i);
     }
@@ -176,9 +195,16 @@ function applyGhostVisuals() {
         for (let i = 0; i < chat.length; i++) {
             const isGhosted = chat[i]?.extra?.sc_ghosted === true;
             const messageElement = document.querySelector(`#chat .mes[mesid="${i}"]`);
+
+            // Re-apply is_system on load (in case chat was reloaded from file)
+            if (isGhosted) {
+                chat[i].is_system = true;
+            }
+
             if (!messageElement) continue;
             if (isGhosted) {
                 messageElement.classList.add('sc-ghosted');
+                messageElement.setAttribute('is_system', 'true');
             } else {
                 messageElement.classList.remove('sc-ghosted');
             }
@@ -186,31 +212,6 @@ function applyGhostVisuals() {
     } catch (e) {
         log('applyGhostVisuals error:', e);
     }
-}
-
-function setupGhostObserver() {
-    const chatContainer = document.querySelector('#chat');
-    if (!chatContainer) {
-        setTimeout(setupGhostObserver, 500);
-        return;
-    }
-    const observer = new MutationObserver((mutations) => {
-        let hasNewMessages = false;
-        for (const mutation of mutations) {
-            if (mutation.addedNodes.length > 0) {
-                hasNewMessages = true;
-                break;
-            }
-        }
-        if (hasNewMessages) {
-            applyGhostVisuals();
-        }
-    });
-    observer.observe(chatContainer, {
-        childList: true,
-        subtree: false,
-    });
-    log('Ghost visual observer attached to #chat');
 }
 
 // ─── Generation Interceptor ─────────────────────────────────────────
