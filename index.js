@@ -1786,6 +1786,6 @@ async function fetchProfilesFallback(selectElement, currentValue) {
     eventSource.on(event_types.APP_READY, () => {
         updateInjection();
         updateUI();
-        console.log(LOG_PREFIX, 'v5.0.1 loaded. Connection Settings available');
+        console.log(LOG_PREFIX, 'v5.0.2 loaded. Connection Settings available');
     });
 })();

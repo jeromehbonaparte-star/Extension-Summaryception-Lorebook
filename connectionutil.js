@@ -127,14 +127,42 @@ async function sendViaProfile(profileId, systemPrompt, userPrompt) {
     }
 
     try {
-        const result = await service.sendRequest(profileId, {
+        const raw = await service.sendRequest(profileId, {
             systemPrompt: systemPrompt,
             prompt: userPrompt,
             ignoreInstruct: true,
         });
 
-        if (!result || typeof result !== 'string') {
+        // Debug: log what we actually got back
+        console.log('[Summaryception][Connection] Profile sendRequest returned:', typeof raw, raw);
+
+        // Handle various possible return types
+        let result;
+        if (typeof raw === 'string') {
+            result = raw;
+        } else if (raw?.content) {
+            result = raw.content;
+        } else if (raw?.message?.content) {
+            result = raw.message.content;
+        } else if (raw?.choices?.[0]?.message?.content) {
+            result = raw.choices[0].message.content;
+        } else if (raw?.data) {
+            result = typeof raw.data === 'string' ? raw.data : JSON.stringify(raw.data);
+        } else if (raw && typeof raw === 'object') {
+            // Last resort: try to find any string value
+            const str = JSON.stringify(raw);
+            console.warn('[Summaryception][Connection] Unexpected return type from sendRequest:', str.substring(0, 500));
+            throw new Error(
+                `Connection Profile returned unexpected type: ${typeof raw}. ` +
+                `Preview: ${str.substring(0, 200)}. ` +
+                `Please report this on the Summaryception GitHub.`
+            );
+        } else {
             throw new Error('Connection Profile returned an empty or invalid response.');
+        }
+
+        if (!result || !result.trim()) {
+            throw new Error('Connection Profile returned an empty response.');
         }
 
         return result;
@@ -146,14 +174,6 @@ async function sendViaProfile(profileId, systemPrompt, userPrompt) {
             throw new Error(
                 `Connection Profile auth failed (401). This may be the API key switching bug (ST Issue #5348). ` +
                 `Update SillyTavern to staging (March 30, 2026+). Original: ${msg}`
-            );
-        }
-
-        // Detect signature mismatch
-        if (msg.includes('is not a function') || msg.includes('undefined')) {
-            throw new Error(
-                'ConnectionManagerRequestService.sendRequest() call failed — the API signature may have changed. ' +
-                'Please report this on the Summaryception GitHub with your SillyTavern version.'
             );
         }
 
