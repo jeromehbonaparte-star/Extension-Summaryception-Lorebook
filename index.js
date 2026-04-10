@@ -29,7 +29,7 @@ const defaultSettings = Object.freeze({
     snippetsPerLayer: 20,
     snippetsPerPromotion: 2,
     maxLayers: 5,
-    injectionTemplate: '[Narrative Memory — oldest → most recent]\n{{summary}}',
+    injectionTemplate: '[Summary of past events:\n{{summary}}]',
 
     summarizerSystemPrompt:
     'You are a precise narrative-state tracker. You output only the summary line — no preamble, no commentary, no markdown.',
@@ -945,23 +945,27 @@ function assembleSummaryBlock() {
 
     if (!store.layers || store.layers.every(l => !l || l.length === 0)) return '';
 
-    const parts = [];
+    const snippets = [];
 
-    for (let i = store.layers.length - 1; i >= 0; i--) {
+    // Deep layers first (oldest context)
+    for (let i = store.layers.length - 1; i >= 1; i--) {
         const layer = store.layers[i];
         if (!layer || layer.length === 0) continue;
-
-        const layerLabel = i === 0
-        ? 'Recent Events'
-        : `Deep Memory L${i}`;
-        const snippets = layer.map(sn => sn.text).join(' | ');
-        parts.push(`[${layerLabel}]: ${snippets}`);
+        for (const sn of layer) {
+            snippets.push(sn.text);
+        }
     }
 
-    if (parts.length === 0) return '';
+    // Layer 0 last (most recent)
+    if (store.layers[0] && store.layers[0].length > 0) {
+        for (const sn of store.layers[0]) {
+            snippets.push(sn.text);
+        }
+    }
 
-    const summaryText = parts.join('\n');
-    return s.injectionTemplate.replace('{{summary}}', summaryText);
+    if (snippets.length === 0) return '';
+
+    return s.injectionTemplate.replace('{{summary}}', snippets.join(' '));
 }
 
 // ─── Injection via setExtensionPrompt ────────────────────────────────
@@ -1782,6 +1786,6 @@ async function fetchProfilesFallback(selectElement, currentValue) {
     eventSource.on(event_types.APP_READY, () => {
         updateInjection();
         updateUI();
-        console.log(LOG_PREFIX, 'v5.0 loaded. Connection Settings available');
+        console.log(LOG_PREFIX, 'v5.0.1 loaded. Connection Settings available');
     });
 })();
