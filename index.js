@@ -1,5 +1,5 @@
 /**
- * Summaryception v5.2.1 — Layered Recursive Summarization for SillyTavern
+ * Summaryception v5.2.2 — Layered Recursive Summarization for SillyTavern
  *
  * NON-DESTRUCTIVE: Uses SillyTavern's native /hide and /unhide commands
  * to exclude summarized messages from LLM context while keeping them
@@ -26,8 +26,8 @@ const defaultSettings = Object.freeze({
     enabled: true,
     verbatimTurns: 7,
     turnsPerSummary: 3,
-    snippetsPerLayer: 20,
-    snippetsPerPromotion: 2,
+    snippetsPerLayer: 30,
+    snippetsPerPromotion: 3,
     maxLayers: 5,
     injectionTemplate: '[Summary of past events: {{summary}}]',
 
@@ -41,7 +41,7 @@ const defaultSettings = Object.freeze({
 
     Summarize only the necessary elements from the passage_in_question to coherently continue the prior_context.
 
-    Focus on: story progression, plot points, plans, tasks, quests; location changes and current location (reference by name); location interactables encountered, used, or discovered; significant changes to player, NPCs, locations, world, or setting.
+    Focus on: story progression, plot points, plans, tasks, quests; location changes and current location (reference by name); location interactables encountered, used, or discovered; significant changes to player, NPCs, locations, date/time, world, or setting.
 
     Exclude anything insubstantial, fluff, atmospheric details, or events already covered in Prior Context.
     Skip any passages that are empty, unclear, or lack significant content.
@@ -2005,6 +2005,6 @@ async function fetchProfilesFallback(selectElement, currentValue) {
     eventSource.on(event_types.APP_READY, () => {
         updateInjection();
         updateUI();
-        console.log(LOG_PREFIX, 'v5.2.1 loaded. Connection Settings available');
+        console.log(LOG_PREFIX, 'v5.2.2 loaded. Connection Settings available');
     });
 })();
