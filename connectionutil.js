@@ -104,21 +104,39 @@ async function sendViaDefault(systemPrompt, userPrompt, responseLength) {
         );
     }
 
-    const options = {
-        systemPrompt: systemPrompt,
-        prompt: userPrompt,
-    };
+    // ST refactored generateRaw from positional args to an object param
+    // in PR #4277 (July 2025). We need to support both signatures.
+    //
+    // New (July 2025+): generateRaw({ prompt, systemPrompt, responseLength })
+    // Old (pre-July 2025): generateRaw(prompt, systemPrompt)
+    //
+    // Detection: the new signature destructures an object, so if we check
+    // the function's length (expected positional params), 0 or 1 means
+    // object-style, 2+ means positional-style.
 
-    // Only override response length if explicitly set.
-    // 0 = use whatever the user's preset has.
-    // Users hitting "max_tokens > 4096 must have stream=true" should either:
-    //   - Set this to 4096 or lower
-    //   - Switch to OpenAI Compatible mode (which uses streaming)
-    if (responseLength && responseLength > 0) {
-        options.responseLength = responseLength;
+    let result;
+
+    if (generateRaw.length <= 1) {
+        // Modern ST: object-based params
+        const options = {
+            systemPrompt: systemPrompt,
+            prompt: userPrompt,
+        };
+
+        if (responseLength && responseLength > 0) {
+            options.responseLength = responseLength;
+        }
+
+        result = await generateRaw(options);
+    } else {
+        // Legacy ST: positional args — generateRaw(prompt, systemPrompt)
+        // Note: legacy signature does not support responseLength override
+        console.warn(
+            '[Summaryception] Detected legacy generateRaw (positional args). ' +
+            'Consider updating SillyTavern to July 2025+ for full feature support.'
+        );
+        result = await generateRaw(userPrompt, systemPrompt);
     }
-
-    const result = await generateRaw(options);
 
     if (!result || typeof result !== 'string') {
         throw new ConnectionError(
