@@ -45,7 +45,7 @@ export { ConnectionError };
  */
 function proxiedUrl(url, useProxy = true) {
     if (!useProxy) return url;
-    return `/cors/${url}`;
+    return `/proxy/${url}`;
 }
 
 /**
