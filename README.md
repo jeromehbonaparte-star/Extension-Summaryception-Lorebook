@@ -2,7 +2,7 @@
 
 ### Layered Recursive Memory for SillyTavern
 
-> Your AI remembers **9,000+ turns** in under **20k tokens**. No context bloat. No lost plot threads. No compromises.
+> Your AI remembers **thousands of turns** in under **20k tokens**. No context bloat. No lost plot threads. No compromises.
 
 Summaryception is a non-destructive, context-aware memory system for [SillyTavern](https://github.com/SillyTavern/SillyTavern) that replaces brute-force context stuffing with intelligent layered summarization. It keeps your most recent turns verbatim while compressing older conversation into ultra-compact summary snippets — organized in recursive layers that scale indefinitely.
 
@@ -49,11 +49,11 @@ YOUR CHAT (e.g., 200 turns)
 │  ┌──────────────────────────────────────────┐
 │  │  LAYER 2 (Deep Memory)                   │
 │  │  Ultra-compressed summaries of Layer 1   │
-│  │  Each covers ~12 turns                   │
+│  │  Each covers ~27 turns                   │
 │  ├──────────────────────────────────────────┤
 │  │  LAYER 1 (Meta-Summaries)                │
 │  │  Compressed summaries of Layer 0         │
-│  │  Each covers ~6 turns                    │
+│  │  Each covers ~9 turns                    │
 │  ├──────────────────────────────────────────┤
 │  │  LAYER 0 (Turn Summaries)                │
 │  │  Direct summaries of conversation turns  │
@@ -63,53 +63,59 @@ YOUR CHAT (e.g., 200 turns)
 │  │  Sent word-for-word to the LLM           │
 │  └──────────────────────────────────────────┘
 │
-│  Total context: ~7-8k tokens
+│  Total context: ~12k tokens
 │  Total narrative coverage: EVERYTHING
 ```
 
 ### The "Ception" — Recursive Layer Promotion
 
-When a layer fills up (default: 20 snippets), the oldest snippets are promoted to the next deeper layer:
+When a layer fills up (default: 30 snippets), the oldest snippets are promoted to the next deeper layer:
 
 1. **Seed promotion** — The very first time a deeper layer opens, the oldest snippet is promoted **directly** as a seed, no LLM call, preserving maximum information as the foundation for that layer.
-2. **Subsequent promotions** — Additional overflow snippets are summarized together against the destination layer's existing content (including the seed) as prior context.
+2. **Subsequent promotions** — Additional overflow snippets (default: 3 at a time) are summarized together against the destination layer's existing content (including the seed) as prior context.
 3. **Cascade** — If the destination layer also fills up, the process repeats, creating Layer 2, Layer 3, etc.
 
-Each layer doubles the turn coverage per snippet while maintaining coherent narrative continuity.
+Each layer multiplies the turn coverage per snippet while maintaining coherent narrative continuity.
 
 ---
 
 ## 📊 The Math
 
-### Default Settings (20 snippets/layer)
+*Using ~70 tokens per snippet as a working median. Actual snippets range from ~30 tokens (late-layer, minimal delta) to ~100 tokens (early context establishment). Your results will vary based on narrative density.*
 
-| Layer | Snippets | Turns per Snippet | Total Turns | ~Tokens |
+### Default Settings (30 snippets/layer, 3 turns/batch, 3 snippets/promotion)
+
+Each promotion merges 3 snippets into 1, so each layer multiplies turn coverage by 3×.
+
+| Layer | Snippets | Turns per Snippet | Total Turns Covered | ~Tokens |
 |---|---|---|---|---|
 | Verbatim | 7 turns | — | 7 | ~5,000 |
-| Layer 0 | 20 | 3 | 60 | ~700 |
-| Layer 1 | 20 | 6 | 120 | ~500 |
-| Layer 2 | 20 | 12 | 240 | ~400 |
-| Layer 3 | 20 | 24 | 480 | ~300 |
-| Layer 4 | 20 | 48 | 960 | ~250 |
-| **Total** | — | — | **~1,867 turns** | **~7,150 tokens** |
+| Layer 0 | 30 | 3 | 90 | ~2,100 |
+| Layer 1 | 30 | 9 | 270 | ~2,100 |
+| Layer 2 | 30 | 27 | 810 | ~2,100 |
+| Layer 3 | 30 | 81 | 2,430 | ~2,100 |
+| Layer 4 | 30 | 243 | 7,290 | ~2,100 |
+| **Total** | — | — | **~10,897 turns** | **~15,500 tokens** |
 
-### Cranked Settings (100 snippets/layer) 🦆
+> **Nearly 11,000 turns of narrative history in ~16k tokens.**
 
-| Layer | Snippets | Turns per Snippet | Total Turns | ~Tokens |
+### Conservative Estimate (smaller snippets at deeper layers)
+
+In practice, deeper layers produce shorter snippets as they compress already-compressed material. A more realistic breakdown:
+
+| Layer | Snippets | Turns per Snippet | ~Tokens/Snippet | ~Layer Tokens |
 |---|---|---|---|---|
-| Verbatim | 7 turns | — | 7 | ~5,000 |
-| Layer 0 | 100 | 3 | 300 | ~3,500 |
-| Layer 1 | 100 | 6 | 600 | ~2,500 |
-| Layer 2 | 100 | 12 | 1,200 | ~2,000 |
-| Layer 3 | 100 | 24 | 2,400 | ~1,500 |
-| Layer 4 | 100 | 48 | 4,800 | ~1,200 |
-| **Total** | — | — | **~9,307 turns** | **~15,700 tokens** |
+| Verbatim | 7 turns | — | — | ~5,000 |
+| Layer 0 | 30 | 3 | ~80 | ~2,400 |
+| Layer 1 | 30 | 9 | ~70 | ~2,100 |
+| Layer 2 | 30 | 27 | ~60 | ~1,800 |
+| Layer 3 | 30 | 81 | ~50 | ~1,500 |
+| Layer 4 | 30 | 243 | ~40 | ~1,200 |
+| **Total** | — | — | — | **~14,000 tokens** |
 
-> **9,307 turns of narrative history in ~16k tokens.**
-> The raw conversation those turns represent? **15-25 million tokens.**
-> That's a compression ratio approaching **1,000:1**.
+> **~11,000 turns in ~14k tokens.** The raw conversation? Roughly **15–25 million tokens.** That's a compression ratio approaching **1,000:1**.
 
-For comparison, most roleplayers hit 17,500 tokens by **turn 10** with verbatim context. Summaryception uses the same budget to remember **nine thousand**.
+For comparison, most roleplayers hit 17,500 tokens by **turn 10** with verbatim context. Summaryception uses the same budget to remember **eleven thousand**.
 
 ---
 
@@ -147,9 +153,9 @@ This is the core innovation. The summarizer prompt receives:
 The instruction: *"Summarize only necessary elements to coherently continue the Prior Context. Exclude anything already covered."*
 
 This means:
-- **Snippet 1** has to establish characters, setting, relationships (~40 tokens)
-- **Snippet 5** only records new events — characters and setting are established (~25 tokens)
-- **Snippet 10** is pure narrative delta — just what changed (~15 tokens)
+- **Snippet 1** has to establish characters, setting, relationships (~80–100 tokens)
+- **Snippet 5** only records new events — characters and setting are established (~50–70 tokens)
+- **Snippet 10** is pure narrative delta — just what changed (~30–50 tokens)
 - **Layer promotions** work the same way — each deeper layer summarizes against its own existing content
 
 Every summary is a **minimal diff**, not a redundant recap.
@@ -188,9 +194,19 @@ All settings are adjustable from the SillyTavern Extensions panel:
 |---|---|---|
 | Verbatim Turns | 7 | Recent assistant turns kept word-for-word |
 | Turns per Batch | 3 | Oldest turns summarized together per trigger |
-| Snippets per Layer | 20 | Max snippets before promoting to next layer |
-| Snippets per Promotion | 2 | How many snippets merge on promotion |
+| Snippets per Layer | 30 | Max snippets before promoting to next layer |
+| Snippets per Promotion | 3 | How many snippets merge on promotion |
 | Max Layers | 5 | Maximum recursion depth |
+
+### Prompt Presets
+
+| Preset | Best For | Focus |
+|---|---|---|
+| **Narrative State** (default) | Character RP, drama, thrillers, romance | Interactions, emotions, relationships, atmosphere, subtext |
+| **Game State** | Roguelites, strategy, mechanical games | Plot points, quests, locations, interactables, state changes |
+| **Custom** | Your own prompt | Whatever you write |
+
+Select a preset from the dropdown in Summary Prompts, or edit the prompt directly — it auto-switches to Custom.
 
 Plus fully customizable:
 - 📝 Summarizer system prompt
@@ -199,18 +215,39 @@ Plus fully customizable:
 
 ---
 
+## 🔌 Connection Settings
+
+Summaryception can use different backends for summarization, independent of your main chat connection:
+
+| Source | Description |
+|---|---|
+| **Default** | Uses SillyTavern's active connection — simplest setup |
+| **OpenAI Compatible** | Direct endpoint with URL, API key, and model — bypasses all ST formatting |
+| **Ollama** | Local Ollama instance with model browser |
+| **Connection Profile** | Uses an ST Connection Profile (⚠️ inherits preset formatting — may degrade summary quality) |
+
+> 💡 **Recommended:** Use **Default** or **OpenAI Compatible** for cleanest results. Connection Profiles inject preset formatting into summary requests, which can cause the model to roleplay instead of summarize.
+
+---
+
 ## 🗂️ Built-in Tools
 
 - **Layer Stats** — Live view of snippet counts per layer and ghosted message count
 - **Injection Preview** — See exactly what gets sent to the LLM
-- **Snippet Browser** — Browse, inspect, and delete individual snippets across all layers
+- **Snippet Browser** — Browse, edit, regenerate, and delete individual snippets across all layers
 - **Export/Import** — Save and restore memory as JSON
 - **Force Summarize** — Manually trigger summarization
+- **Stop** — Abort any running summarization, progress saved
+- **Repair** — Find and fix orphaned hidden messages
 - **Slash Commands** — `/sc-status`, `/sc-preview`, `/sc-clear`
 
 ---
 
 ## 📥 Installation
+
+### Requirements
+
+- **SillyTavern 1.16.0+** (release or staging). Older versions use an incompatible `generateRaw` signature and will not work correctly.
 
 ### From SillyTavern UI
 1. Open **Extensions** → **Install Extension**
@@ -231,10 +268,10 @@ Restart SillyTavern and enable the extension.
 
 | | Traditional Summary | Summaryception |
 |---|---|---|
-| **Compression** | ~10:1, lossy | ~125:1, lossless |
-| **Context at turn 100** | 30k+ tokens or truncated | ~8k tokens |
-| **Context at turn 1,000** | Impossible without truncation | ~12k tokens |
-| **Context at turn 9,000** | Literally impossible | ~16k tokens |
+| **Compression** | ~10:1, lossy | ~125:1 per snippet, lossless |
+| **Context at turn 100** | 30k+ tokens or truncated | ~10k tokens |
+| **Context at turn 1,000** | Impossible without truncation | ~13k tokens |
+| **Context at turn 10,000** | Literally impossible | ~16k tokens |
 | **Lost information** | Lots — hedged by keeping more raw turns | None — every state change is tracked |
 | **Coherence over time** | Degrades as context grows | Stable indefinitely |
 | **Works with budget models** | Poorly — needs powerful summarizer | Excellently — prompt does the heavy lifting |
