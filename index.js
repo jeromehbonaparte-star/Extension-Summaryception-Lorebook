@@ -24,7 +24,7 @@ const LOG_PREFIX = '[Summaryception]';
 
 const defaultSettings = Object.freeze({
     enabled: true,
-    verbatimTurns: 7,
+    verbatimTurns: 10,
     turnsPerSummary: 3,
     snippetsPerLayer: 30,
     snippetsPerPromotion: 3,
