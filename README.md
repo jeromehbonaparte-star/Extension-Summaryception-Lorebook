@@ -1,10 +1,64 @@
-# 🧠 Summaryception
+# 🧠 Summaryception + Lorebook
 
-### Layered Recursive Memory for SillyTavern
+### Layered Recursive Memory + Automated Lorebook Ingestion for SillyTavern
 
-> Your AI remembers **thousands of turns** in under **20k tokens**. No context bloat. No lost plot threads. No compromises.
+> Your AI remembers **thousands of turns** in under **20k tokens**. Canonical characters, locations, factions, and items are automatically surfaced into a **lorebook** you control. No context bloat. No lost plot threads. No re-establishing who Kael is every chapter.
 
-Summaryception is a non-destructive, context-aware memory system for [SillyTavern](https://github.com/SillyTavern/SillyTavern) that replaces brute-force context stuffing with intelligent layered summarization. It keeps your most recent turns verbatim while compressing older conversation into ultra-compact summary snippets — organized in recursive layers that scale indefinitely.
+This is a **fork** of [Lodactio/Extension-Summaryception](https://github.com/Lodactio/Extension-Summaryception) that adds an **automated lorebook-ingestion pipeline** on top of the original recursive summarizer. All of the upstream functionality is preserved; the lorebook features are additive and opt-in.
+
+---
+
+## 🆕 What the fork adds
+
+Long-form story writing (as opposed to short RP turns) runs into a specific problem: every chapter, stable facts like a character's hex color, verbal tics, and appearance have to be carried through the summary chain. As summaries are re-compressed over layers, those facts decay. The result: Kael's accent drifts. His dialogue color shifts. His left hand was bandaged two chapters ago but the AI forgot.
+
+The fork solves this by **splitting the work**:
+
+- **Volatile state + events** → the existing Summaryception pipeline (delta-only snippets, hierarchical layers).
+- **Canonical, static facts** → **SillyTavern World Info (lorebook) entries**, written once and never re-summarized.
+
+### How it works
+
+1. A new prompt preset — **"Narrative + Lorebook"** — instructs the summarizer to emit explicit tags inside each snippet:
+   - `NEW: <type>: <Name> — <one-phrase gloss>` on first appearance
+   - `UPDATE: <type>: <Name> — <what canonically changed>` on permanent state shifts (wound, new tic, faction move, item broken)
+   - Where `<type>` is one of: `char | loc | faction | item`
+
+2. After every Layer-0 snippet is produced, the extension scans for these tags. For each:
+   - **NEW** → a **second LLM call** expands the gloss into a structured lorebook entry using a type-specific prompt (Character / Location / Faction / Item). The proposal lands in a **per-chat review queue**.
+   - **UPDATE** → the extension loads the existing entry, runs a **compare-and-update LLM call** that integrates the change into the existing prose, and queues a diff for your review.
+
+3. The **Review Queue** lives in the Summaryception settings panel. Each pending proposal shows the generated entry, the source snippet it came from, a diff view (for updates), and Approve / Reject / Edit / Save buttons. Approved entries are committed to the World Info file you've chosen as the target.
+
+4. **Auto-commit mode** is available for users who want zero friction, but the default is **queue mode**: nothing is written until you approve.
+
+### What you get
+
+- **Never re-summarize static facts**: once Kael has an entry, his color/tics/appearance are injected on-mention at near-zero cost (vectorized entries).
+- **Per-chat queues**: separate stories keep separate pending proposals.
+- **Collision-safe**: if the summarizer emits `NEW:` for a name that already has an entry, it's auto-converted to an UPDATE with a diff view.
+- **Full prompt customization**: each entry type has its own editable prompt, plus a shared system prompt.
+- **Uses the same connection settings** as the summarizer — default API, connection profile, Ollama, or OpenAI-compatible.
+
+### Quick start
+
+1. Install this extension (URL: `https://github.com/jeromehbonaparte-star/Extension-Summaryception-Lorebook`).
+2. Open Summaryception settings. Under **Summarizer Prompts → Prompt Preset**, switch to **"Narrative + Lorebook"**.
+3. Under **📚 Lorebook Ingestion**:
+   - Toggle **Enable automatic lorebook ingestion**.
+   - Select a **Target Lorebook** (create one first in World Info if needed).
+   - Leave Mode as **Queue** (recommended).
+4. Write. After the next summarization batch fires, check the Review Queue in the settings panel and approve/reject proposals.
+
+> ⚠️ Note: If you had the upstream Summaryception installed, uninstall it first — this fork uses the same internal module name (`summaryception`) so existing settings and per-chat memory will carry over seamlessly, but having both installed will cause conflicts.
+
+---
+
+## 📖 Upstream documentation
+
+Everything below is from the upstream Summaryception. The fork does not change any of this behavior; it only adds the lorebook pipeline on top.
+
+---
 
 ---
 
