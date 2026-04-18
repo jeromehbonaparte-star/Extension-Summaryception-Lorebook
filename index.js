@@ -1,9 +1,17 @@
 /**
- * Summaryception v5.3.2 — Layered Recursive Summarization for SillyTavern
+ * Summaryception + Lorebook v5.3.2-lorebook.1 — Layered Recursive Summarization
+ * for SillyTavern, forked to add automated lorebook ingestion of named entities.
  *
  * NON-DESTRUCTIVE: Uses SillyTavern's native /hide and /unhide commands
  * to exclude summarized messages from LLM context while keeping them
  * fully visible and readable in the chat UI.
+ *
+ * Fork additions:
+ *   - NEW:/UPDATE: tag contract for character/location/faction/item extraction
+ *   - Per-type entry-generation prompts (second LLM pass)
+ *   - Per-chat review queue (chatMetadata.reviewQueue)
+ *   - Commit to SillyTavern World Info (vectorized by default)
+ *   - Compare-and-update for established entities
  *
  * AGPL-3.0
  */
@@ -17,8 +25,23 @@ import {
     getConnectionDisplayName,
 } from './connectionutil.js';
 
+import {
+    LOREBOOK_DEFAULT_SETTINGS,
+    ingestSnippet,
+    ensureQueue,
+    pendingCount,
+    findQueueItem,
+    removeQueueItem,
+    commitReviewItem,
+    rejectReviewItem,
+    updateReviewItemContent,
+    listAvailableLorebooks,
+    registerSettingsAccessor,
+} from './lorebook.js';
+
 const MODULE_NAME = 'summaryception';
 const LOG_PREFIX = '[Summaryception]';
+const EXTENSION_FOLDER = 'Extension-Summaryception-Lorebook';
 
 // ─── Default Settings ────────────────────────────────────────────────
 
@@ -72,11 +95,53 @@ const defaultSettings = Object.freeze({
     openaiKey: '',
     openaiModel: '',
     openaiMaxTokens: 0,                   // 0 = no limit (provider default)
+
+    // ─── Lorebook Ingestion (fork additions) ────────────────────
+    ...LOREBOOK_DEFAULT_SETTINGS,
 });
 
 // ─── Prompt Presets ──────────────────────────────────────────────────
 
 const PROMPT_PRESETS = {
+    narrativeLorebook: `<player_name>{{player_name}}</player_name>
+<prior_context>{{context_str}}</prior_context>
+<input>{{story_txt}}</input>
+
+You maintain a compact continuity ledger. Your output is the AI's only memory of this input when writing future chapters.
+
+INPUT TYPE
+- If <input> is narrative prose: extract a fresh snippet.
+- If <input> is one or more lines already in [Ch. N — ...] | ... format: MERGE them into ONE snippet per the merge rules below. Do not re-interpret as prose.
+
+RULES
+1. DELTA-ONLY. Record what changed or newly happened. Never restate anything already in <prior_context>.
+2. PRESERVE VERBATIM: character and place names, sworn oaths, quoted threats or promises, numbers, wounds, items broken/acquired/lost.
+3. LENGTH: single line, no more than 25 short phrases. Drop priority when over budget: themes → sensory detail → emotional temperature. Never drop: events, state deltas, unresolved hooks, NEW/UPDATE tags.
+4. Empty / insubstantial input → output exactly: [Ch. N — no new continuity]
+5. Infer Ch. N from the highest marker in <prior_context>; increment when a new chapter begins.
+
+CAPTURE (delta-only)
+events: ordered beat chain with → arrows. Flag private knowledge as (known only to X).
+state: per character, only changes — wounds, possessions, emotion, location, new knowledge.
+relations: pairwise shifts with direction (e.g., Kael→Mira: trust broken; Mira→Kael: owes debt).
+dialogue: meaningful exchanges — who / topic / outcome. Quote 1 short line only if wording is load-bearing.
+hooks: new unresolved threads. Mark resolved as ✓<thread>.
+setting: location/time shift, elapsed time.
+entities:
+- First appearance of a named entity → emit NEW: <type>: <Name> — <one-phrase gloss>
+    where <type> is one of: char | loc | faction | item
+- Canonical change to an established entity (permanent: wound, new tic, voice shift, faction move, item broken) → emit UPDATE: <type>: <Name> — <what canonically changed>
+- Do NOT emit NEW/UPDATE for transient state (merely tired, briefly angry, temporarily hungry).
+
+MERGE RULES (input is existing snippets)
+- Preserve chronological event order; collapse near-duplicates.
+- Consolidate character state to latest known value.
+- Union hooks; drop ones now ✓.
+- Forward all NEW: and UPDATE: tags unchanged.
+
+OUTPUT (single line)
+[Ch. N — scene label] | events: ... ; state: ... ; relations: ... ; dialogue: ... ; hooks: ... ; setting: ... ; entities: NEW: char: Name — gloss; UPDATE: loc: Name — change ; themes: ...`,
+
     narrative: `<player_name>{{player_name}}</player_name>
     <prior_context>{{context_str}}</prior_context>
     <passage_in_question>{{story_txt}}</passage_in_question>
@@ -190,11 +255,16 @@ function getChatStore() {
             layers: [],
             summarizedUpTo: -1,
             ghostedIndices: [],           // Track which messages WE ghosted
+            reviewQueue: [],              // Pending lorebook ingestion proposals (fork)
         };
     }
     // Migration: add ghostedIndices if missing from older saves
     if (!chatMetadata[MODULE_NAME].ghostedIndices) {
         chatMetadata[MODULE_NAME].ghostedIndices = [];
+    }
+    // Migration: add reviewQueue for older saves (fork)
+    if (!Array.isArray(chatMetadata[MODULE_NAME].reviewQueue)) {
+        chatMetadata[MODULE_NAME].reviewQueue = [];
     }
     return chatMetadata[MODULE_NAME];
 }
@@ -793,6 +863,22 @@ async function summarizeOneBatch(visibleTurns) {
 
         log(`Layer 0 now has ${store.layers[0].length} snippets`);
 
+        // ─── Lorebook ingestion hook (fork) ────────────────────
+        // Non-blocking: any failure inside ingestSnippet must not break summarization.
+        try {
+            await ingestSnippet({
+                snippetText: summary,
+                turnRange: [passageStart, endIdx],
+                settings: s,
+                store,
+                playerName: getPlayerName(),
+            });
+        } catch (e) {
+            log('Lorebook ingestion failed (non-fatal):', e);
+            console.warn(LOG_PREFIX, 'Lorebook ingestion failed:', e);
+        }
+        // ───────────────────────────────────────────────────────
+
         await maybePromoteLayer(0);
         await saveChatStore();
 
@@ -803,7 +889,10 @@ async function summarizeOneBatch(visibleTurns) {
             log('Could not save chat:', e);
         }
 
-        toastr.success(`Summary saved (Layer 0: ${store.layers[0].length} snippets)`, 'Summaryception', { timeOut: 2000 });
+        const pending = pendingCount(store);
+        const lbMsg = pending > 0 ? ` · ${pending} lorebook review${pending > 1 ? 's' : ''} pending` : '';
+        toastr.success(`Summary saved (Layer 0: ${store.layers[0].length} snippets)${lbMsg}`, 'Summaryception', { timeOut: 2500 });
+        if (pending > 0) updateLorebookQueueUI();
         return true;
 
     } finally {
@@ -848,6 +937,21 @@ async function summarizeOneBatchFromTurns(visibleTurns) {
     });
 
     store.summarizedUpTo = Math.max(store.summarizedUpTo, endIdx);
+
+    // ─── Lorebook ingestion hook (fork, catchup path) ──────────
+    try {
+        await ingestSnippet({
+            snippetText: summary,
+            turnRange: [passageStart, endIdx],
+            settings: s,
+            store,
+            playerName: getPlayerName(),
+        });
+    } catch (e) {
+        log('Lorebook ingestion failed (non-fatal):', e);
+        console.warn(LOG_PREFIX, 'Lorebook ingestion failed:', e);
+    }
+    // ───────────────────────────────────────────────────────────
 
     await saveChatStore();
     await ghostMessagesUpTo(endIdx);
@@ -1326,6 +1430,8 @@ function updateUI() {
         $('#sc_preview').val(preview || '(empty — no summaries yet)');
 
         updateSnippetBrowser();
+        updateLorebookSettingsUI();
+        updateLorebookQueueUI();
     } catch (e) {
         log('updateUI error:', e);
     }
@@ -2095,6 +2201,284 @@ async function fetchProfilesFallback(selectElement, currentValue) {
     }
 }
 
+// ─── Lorebook Ingestion UI (fork) ────────────────────────────────────
+// Note: escapeHtml() is already defined earlier in this module (used by the
+// snippet browser) — we reuse it here instead of redeclaring.
+
+function repopulateLorebookTargetDropdown() {
+    const sel = document.getElementById('sc_lorebook_target');
+    if (!sel) return;
+    const s = getSettings();
+    const current = s.lorebookTargetName || '';
+    const books = listAvailableLorebooks();
+    sel.innerHTML = '<option value="">— Select a lorebook —</option>';
+    for (const name of books) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        sel.appendChild(opt);
+    }
+    if (current && books.includes(current)) {
+        sel.value = current;
+    } else if (current) {
+        // Stale selection — keep it in the dropdown as a flagged option
+        const opt = document.createElement('option');
+        opt.value = current;
+        opt.textContent = current + ' (missing)';
+        sel.appendChild(opt);
+        sel.value = current;
+    }
+}
+
+function updateLorebookSettingsUI() {
+    try {
+        const s = getSettings();
+        $('#sc_lorebook_enabled').prop('checked', !!s.lorebookEnabled);
+        $('#sc_lorebook_mode').val(s.lorebookMode || 'queue');
+        $('#sc_lorebook_entry_vectorized').prop('checked', !!s.lorebookEntryVectorized);
+        $('#sc_lorebook_entry_selective').prop('checked', !!s.lorebookEntrySelective);
+        $('#sc_lorebook_entry_constant').prop('checked', !!s.lorebookEntryConstant);
+
+        $('#sc_entry_prompt_system').val(s.entryPromptSystem);
+        $('#sc_entry_prompt_character').val(s.entryPromptCharacter);
+        $('#sc_entry_prompt_location').val(s.entryPromptLocation);
+        $('#sc_entry_prompt_faction').val(s.entryPromptFaction);
+        $('#sc_entry_prompt_item').val(s.entryPromptItem);
+        $('#sc_entry_prompt_update').val(s.entryPromptUpdate);
+
+        repopulateLorebookTargetDropdown();
+    } catch (e) {
+        log('updateLorebookSettingsUI error:', e);
+    }
+}
+
+function updateLorebookQueueUI() {
+    try {
+        const container = document.getElementById('sc_lorebook_queue');
+        const badge = document.getElementById('sc_lorebook_pending_badge');
+        if (!container && !badge) return;
+
+        const store = getChatStore();
+        const queue = ensureQueue(store);
+        const pending = queue.filter(i => i.status === 'pending');
+        const recent = queue.filter(i => i.status !== 'pending')
+            .sort((a, b) => (b.committedAt || b.rejectedAt || 0) - (a.committedAt || a.rejectedAt || 0))
+            .slice(0, 10);
+
+        if (badge) badge.textContent = pending.length > 0 ? `(${pending.length})` : '';
+
+        if (!container) return;
+
+        if (pending.length === 0 && recent.length === 0) {
+            container.innerHTML = '<div class="sc-muted">No lorebook proposals yet. When the summarizer emits NEW:/UPDATE: tags, entries will be staged here for review.</div>';
+            return;
+        }
+
+        let html = '';
+        if (pending.length > 0) {
+            html += `<div class="sc-layer-stat"><strong>${pending.length}</strong> pending review${pending.length > 1 ? 's' : ''}</div>`;
+            for (const item of pending) {
+                html += renderQueueItem(item, true);
+            }
+        } else {
+            html += '<div class="sc-muted">No pending proposals.</div>';
+        }
+
+        if (recent.length > 0) {
+            html += '<hr class="sc-divider" />';
+            html += '<div class="sc-layer-stat sc-muted">Recent history (last 10):</div>';
+            for (const item of recent) {
+                html += renderQueueItem(item, false);
+            }
+        }
+
+        container.innerHTML = html;
+        bindQueueItemHandlers();
+    } catch (e) {
+        log('updateLorebookQueueUI error:', e);
+    }
+}
+
+function renderQueueItem(item, actionable) {
+    const kindBadge = item.kind === 'create'
+        ? '<span class="sc-lb-badge sc-lb-create">NEW</span>'
+        : '<span class="sc-lb-badge sc-lb-update">UPDATE</span>';
+    const typeBadge = `<span class="sc-lb-badge sc-lb-type">${escapeHtml(item.entityType)}</span>`;
+    const statusBadge = (() => {
+        if (item.status === 'approved') return '<span class="sc-lb-badge sc-lb-ok">committed</span>';
+        if (item.status === 'rejected') return '<span class="sc-lb-badge sc-lb-rej">rejected</span>';
+        return '';
+    })();
+
+    const turnRange = item.sourceTurnRange ? `turns ${item.sourceTurnRange[0]}–${item.sourceTurnRange[1]}` : '';
+    const lb = item.targetLorebook ? `→ <code>${escapeHtml(item.targetLorebook)}</code>` : '';
+
+    let diffHtml = '';
+    if (item.kind === 'update' && item.existingContentSnapshot) {
+        diffHtml = `
+            <details class="sc-lb-diff">
+                <summary>Existing content (before update)</summary>
+                <pre class="sc-lb-existing">${escapeHtml(item.existingContentSnapshot)}</pre>
+            </details>`;
+    }
+
+    const textareaId = `sc_lb_item_${item.id}`;
+    const textarea = actionable
+        ? `<textarea id="${textareaId}" class="text_pole sc-textarea" rows="6" data-item-id="${item.id}">${escapeHtml(item.proposedContent)}</textarea>`
+        : `<pre class="sc-lb-existing">${escapeHtml(item.proposedContent)}</pre>`;
+
+    const actions = actionable ? `
+        <div class="sc-button-row">
+            <button class="menu_button sc-lb-approve" data-item-id="${item.id}"><i class="fa-solid fa-check"></i> Approve & Commit</button>
+            <button class="menu_button sc-lb-reject" data-item-id="${item.id}"><i class="fa-solid fa-xmark"></i> Reject</button>
+            <button class="menu_button sc-lb-save" data-item-id="${item.id}"><i class="fa-solid fa-floppy-disk"></i> Save Edits</button>
+            <button class="menu_button menu_button_danger sc-lb-delete" data-item-id="${item.id}" title="Remove this proposal from the queue"><i class="fa-solid fa-trash"></i></button>
+        </div>` : `
+        <div class="sc-button-row">
+            <button class="menu_button sc-lb-delete" data-item-id="${item.id}" title="Remove from history"><i class="fa-solid fa-trash"></i> Remove from history</button>
+        </div>`;
+
+    return `
+        <div class="sc-lb-item" data-item-id="${item.id}">
+            <div class="sc-lb-header">
+                ${kindBadge}${typeBadge}${statusBadge}
+                <strong>${escapeHtml(item.name)}</strong>
+                <small class="sc-muted">${escapeHtml(item.detail || '')}</small>
+            </div>
+            <div class="sc-lb-meta sc-muted">
+                <small>${turnRange} ${lb}</small>
+            </div>
+            ${diffHtml}
+            ${textarea}
+            ${actions}
+        </div>`;
+}
+
+function bindQueueItemHandlers() {
+    $('.sc-lb-approve').off('click').on('click', async function () {
+        const id = $(this).data('item-id');
+        const store = getChatStore();
+        // Pull any edits from the textarea first
+        const ta = document.getElementById(`sc_lb_item_${id}`);
+        if (ta) {
+            updateReviewItemContent({ store, id, newContent: ta.value });
+        }
+        try {
+            await commitReviewItem({ store, id });
+            await saveChatStore();
+            toastr.success('Committed to lorebook.', 'Summaryception', { timeOut: 2500 });
+        } catch (e) {
+            console.error(LOG_PREFIX, 'Commit failed:', e);
+            toastr.error(`Commit failed: ${e.message || e}`, 'Summaryception', { timeOut: 5000 });
+        }
+        updateLorebookQueueUI();
+    });
+
+    $('.sc-lb-reject').off('click').on('click', async function () {
+        const id = $(this).data('item-id');
+        const store = getChatStore();
+        rejectReviewItem({ store, id });
+        await saveChatStore();
+        updateLorebookQueueUI();
+        toastr.info('Proposal rejected.', 'Summaryception', { timeOut: 2000 });
+    });
+
+    $('.sc-lb-save').off('click').on('click', async function () {
+        const id = $(this).data('item-id');
+        const store = getChatStore();
+        const ta = document.getElementById(`sc_lb_item_${id}`);
+        if (ta) {
+            updateReviewItemContent({ store, id, newContent: ta.value });
+            await saveChatStore();
+            toastr.success('Edits saved.', 'Summaryception', { timeOut: 1500 });
+        }
+    });
+
+    $('.sc-lb-delete').off('click').on('click', async function () {
+        const id = $(this).data('item-id');
+        const store = getChatStore();
+        removeQueueItem(store, id);
+        await saveChatStore();
+        updateLorebookQueueUI();
+    });
+}
+
+function initLorebookUI() {
+    updateLorebookSettingsUI();
+
+    // Toggle
+    $('#sc_lorebook_enabled').on('change', function () {
+        getSettings().lorebookEnabled = $(this).prop('checked');
+        saveSettings();
+    });
+
+    // Mode
+    $('#sc_lorebook_mode').on('change', function () {
+        getSettings().lorebookMode = $(this).val();
+        saveSettings();
+    });
+
+    // Target lorebook
+    $('#sc_lorebook_target').on('change', function () {
+        getSettings().lorebookTargetName = $(this).val();
+        saveSettings();
+    });
+
+    $('#sc_lorebook_refresh_targets').on('click', function () {
+        repopulateLorebookTargetDropdown();
+    });
+
+    // Checkboxes
+    $('#sc_lorebook_entry_vectorized').on('change', function () {
+        getSettings().lorebookEntryVectorized = $(this).prop('checked');
+        saveSettings();
+    });
+    $('#sc_lorebook_entry_selective').on('change', function () {
+        getSettings().lorebookEntrySelective = $(this).prop('checked');
+        saveSettings();
+    });
+    $('#sc_lorebook_entry_constant').on('change', function () {
+        getSettings().lorebookEntryConstant = $(this).prop('checked');
+        saveSettings();
+    });
+
+    // Prompt textareas
+    const entryPromptFields = [
+        { id: '#sc_entry_prompt_system', key: 'entryPromptSystem' },
+        { id: '#sc_entry_prompt_character', key: 'entryPromptCharacter' },
+        { id: '#sc_entry_prompt_location', key: 'entryPromptLocation' },
+        { id: '#sc_entry_prompt_faction', key: 'entryPromptFaction' },
+        { id: '#sc_entry_prompt_item', key: 'entryPromptItem' },
+        { id: '#sc_entry_prompt_update', key: 'entryPromptUpdate' },
+    ];
+    for (const f of entryPromptFields) {
+        $(f.id).on('change input', function () {
+            getSettings()[f.key] = $(this).val();
+            saveSettings();
+        });
+    }
+
+    // Queue actions
+    $('#sc_lorebook_clear_history').on('click', async function () {
+        if (!confirm('Remove all committed/rejected entries from the queue history? (Pending proposals are kept.)')) return;
+        const store = getChatStore();
+        const queue = ensureQueue(store);
+        const kept = queue.filter(i => i.status === 'pending');
+        queue.length = 0;
+        queue.push(...kept);
+        await saveChatStore();
+        updateLorebookQueueUI();
+    });
+
+    $('#sc_lorebook_clear_all').on('click', async function () {
+        if (!confirm('Discard ALL lorebook proposals (including pending)? This cannot be undone.')) return;
+        const store = getChatStore();
+        store.reviewQueue = [];
+        await saveChatStore();
+        updateLorebookQueueUI();
+    });
+}
+
 // ─── Initialization ──────────────────────────────────────────────────
 
 (async function init() {
@@ -2106,8 +2490,12 @@ async function fetchProfilesFallback(selectElement, currentValue) {
 
     getSettings();
 
+    // Register a settings accessor for lorebook.js so it can read vectorized/selective/constant
+    // defaults without creating a circular import.
+    registerSettingsAccessor(getSettings);
+
     const html = await renderExtensionTemplateAsync(
-        'third-party/Extension-Summaryception',
+        `third-party/${EXTENSION_FOLDER}`,
         'settings',
         {}
     );
@@ -2115,9 +2503,11 @@ async function fetchProfilesFallback(selectElement, currentValue) {
 
     bindUIEvents();
     initConnectionUI();
+    initLorebookUI();
 
     eventSource.on(event_types.MESSAGE_RECEIVED, onMessageReceived);
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
+    eventSource.on(event_types.CHAT_CHANGED, updateLorebookQueueUI);
     eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
 
     registerSlashCommands();
@@ -2125,6 +2515,7 @@ async function fetchProfilesFallback(selectElement, currentValue) {
     eventSource.on(event_types.APP_READY, () => {
         updateInjection();
         updateUI();
-        console.log(LOG_PREFIX, 'v5.3.2 loaded. Connection Settings available');
+        updateLorebookQueueUI();
+        console.log(LOG_PREFIX, 'v5.3.2-lorebook.1 loaded. Connection + Lorebook Ingestion available');
     });
 })();

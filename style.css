@@ -423,3 +423,114 @@
 .summaryception-connection-status.loading {
     color: #ff9800;
 }
+
+/* ─── Lorebook Ingestion (fork) ─────────────────────────────────── */
+
+.sc-settings .sc-lb-pending {
+    color: #ff9800;
+    font-weight: bold;
+    font-size: 0.85em;
+    margin-left: 6px;
+}
+
+.sc-settings .sc-lb-item {
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 8px 0;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.sc-settings .sc-lb-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+
+.sc-settings .sc-lb-meta {
+    margin-bottom: 6px;
+}
+
+.sc-settings .sc-lb-badge {
+    display: inline-block;
+    font-size: 0.72em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: bold;
+    border: 1px solid transparent;
+}
+
+.sc-settings .sc-lb-create {
+    background: rgba(76, 175, 80, 0.15);
+    color: #4caf50;
+    border-color: rgba(76, 175, 80, 0.4);
+}
+
+.sc-settings .sc-lb-update {
+    background: rgba(255, 152, 0, 0.15);
+    color: #ff9800;
+    border-color: rgba(255, 152, 0, 0.4);
+}
+
+.sc-settings .sc-lb-type {
+    background: rgba(135, 185, 255, 0.12);
+    color: #87b9ff;
+    border-color: rgba(135, 185, 255, 0.35);
+}
+
+.sc-settings .sc-lb-ok {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4caf50;
+}
+
+.sc-settings .sc-lb-rej {
+    background: rgba(244, 67, 54, 0.15);
+    color: #f44336;
+}
+
+.sc-settings .sc-lb-diff {
+    margin: 6px 0;
+    font-size: 0.85em;
+}
+
+.sc-settings .sc-lb-diff summary {
+    cursor: pointer;
+    opacity: 0.7;
+    padding: 2px 0;
+}
+
+.sc-settings .sc-lb-existing {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: monospace;
+    font-size: 0.82em;
+    margin: 4px 0;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.sc-settings .sc-lb-approve {
+    color: #4caf50;
+    border-color: rgba(76, 175, 80, 0.5);
+}
+
+.sc-settings .sc-lb-approve:hover {
+    background: rgba(76, 175, 80, 0.15);
+}
+
+.sc-settings .sc-lb-reject {
+    color: #ff9800;
+    border-color: rgba(255, 152, 0, 0.5);
+}
+
+.sc-settings .sc-lb-reject:hover {
+    background: rgba(255, 152, 0, 0.15);
+}

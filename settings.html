@@ -73,6 +73,142 @@
 
             <hr class="sc-divider" />
 
+            <!-- ═══ Lorebook Ingestion (fork) ═══ -->
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>📚 Lorebook Ingestion <span id="sc_lorebook_pending_badge" class="sc-lb-pending"></span></b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+
+                    <div class="sc-row">
+                        <label class="checkbox_label" for="sc_lorebook_enabled">
+                            <input type="checkbox" id="sc_lorebook_enabled" />
+                            <span>Enable automatic lorebook ingestion</span>
+                            <small class="sc-hint">
+                                Scans each Layer-0 snippet for <code>NEW:</code> and <code>UPDATE:</code> tags and stages
+                                lorebook entries. Requires the <strong>Narrative + Lorebook</strong> preset (or your own prompt
+                                that emits the tag contract) to work.
+                            </small>
+                        </label>
+                    </div>
+
+                    <div class="sc-row">
+                        <label for="sc_lorebook_target">
+                            <span>Target Lorebook (World Info)</span>
+                            <small class="sc-hint">Proposals are committed to this file when you approve them.</small>
+                        </label>
+                        <div class="sc-slider-row">
+                            <select id="sc_lorebook_target" class="text_pole" style="flex:1;">
+                                <option value="">— Select a lorebook —</option>
+                            </select>
+                            <button id="sc_lorebook_refresh_targets" class="menu_button" title="Refresh the list from World Info">
+                                <i class="fa-solid fa-arrows-rotate"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="sc-row">
+                        <label for="sc_lorebook_mode">
+                            <span>Mode</span>
+                            <small class="sc-hint">
+                                <strong>Queue</strong> (recommended): proposals require your approval before being written.
+                                <strong>Auto</strong>: proposals commit immediately — faster but riskier if the LLM produces garbage.
+                            </small>
+                        </label>
+                        <select id="sc_lorebook_mode" class="text_pole">
+                            <option value="queue">Queue (review before commit)</option>
+                            <option value="auto">Auto-commit</option>
+                        </select>
+                    </div>
+
+                    <div class="sc-row">
+                        <label><span>Default Entry Flags</span>
+                            <small class="sc-hint">Applied when creating new entries. Existing entries on update keep their own flags.</small>
+                        </label>
+                        <div>
+                            <label class="checkbox_label" for="sc_lorebook_entry_vectorized">
+                                <input type="checkbox" id="sc_lorebook_entry_vectorized" />
+                                <span>Vectorized (fires on semantic match — recommended)</span>
+                            </label>
+                            <label class="checkbox_label" for="sc_lorebook_entry_selective">
+                                <input type="checkbox" id="sc_lorebook_entry_selective" />
+                                <span>Selective (fires only when key matches)</span>
+                            </label>
+                            <label class="checkbox_label" for="sc_lorebook_entry_constant">
+                                <input type="checkbox" id="sc_lorebook_entry_constant" />
+                                <span>Constant (always inject — use sparingly)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <hr class="sc-divider" />
+
+                    <h4 class="sc-section-title">📝 Review Queue</h4>
+                    <div id="sc_lorebook_queue" class="sc-stats-box"></div>
+                    <div class="sc-button-row">
+                        <button id="sc_lorebook_clear_history" class="menu_button">
+                            <i class="fa-solid fa-broom"></i> Clear History
+                        </button>
+                        <button id="sc_lorebook_clear_all" class="menu_button menu_button_danger">
+                            <i class="fa-solid fa-trash"></i> Discard All
+                        </button>
+                    </div>
+
+                    <hr class="sc-divider" />
+
+                    <!-- Entry-generation prompts -->
+                    <div class="inline-drawer">
+                        <div class="inline-drawer-toggle inline-drawer-header">
+                            <b>✏️ Entry-Generation Prompts</b>
+                            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                        </div>
+                        <div class="inline-drawer-content">
+                            <small class="sc-hint">
+                                These prompts run as a second LLM call (per tag) to expand a <code>NEW:</code> or <code>UPDATE:</code>
+                                tag into a full lorebook entry. Available variables:
+                                <code>{{player_name}}</code> <code>{{entity_name}}</code> <code>{{entity_type}}</code>
+                                <code>{{gloss}}</code> <code>{{source_snippet}}</code>
+                                <code>{{change_reason}}</code> <code>{{existing_entry}}</code>
+                            </small>
+
+                            <div class="sc-row">
+                                <label for="sc_entry_prompt_system"><span>System Prompt (shared)</span></label>
+                                <textarea id="sc_entry_prompt_system" class="text_pole sc-textarea" rows="2"></textarea>
+                            </div>
+
+                            <div class="sc-row">
+                                <label for="sc_entry_prompt_character"><span>Character Entry Prompt</span></label>
+                                <textarea id="sc_entry_prompt_character" class="text_pole sc-textarea sc-textarea-tall" rows="8"></textarea>
+                            </div>
+
+                            <div class="sc-row">
+                                <label for="sc_entry_prompt_location"><span>Location Entry Prompt</span></label>
+                                <textarea id="sc_entry_prompt_location" class="text_pole sc-textarea sc-textarea-tall" rows="8"></textarea>
+                            </div>
+
+                            <div class="sc-row">
+                                <label for="sc_entry_prompt_faction"><span>Faction Entry Prompt</span></label>
+                                <textarea id="sc_entry_prompt_faction" class="text_pole sc-textarea sc-textarea-tall" rows="8"></textarea>
+                            </div>
+
+                            <div class="sc-row">
+                                <label for="sc_entry_prompt_item"><span>Item Entry Prompt</span></label>
+                                <textarea id="sc_entry_prompt_item" class="text_pole sc-textarea sc-textarea-tall" rows="8"></textarea>
+                            </div>
+
+                            <div class="sc-row">
+                                <label for="sc_entry_prompt_update"><span>Update Merger Prompt (for UPDATE: tags on existing entries)</span></label>
+                                <textarea id="sc_entry_prompt_update" class="text_pole sc-textarea sc-textarea-tall" rows="8"></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <hr class="sc-divider" />
+
             <!-- ═══ Advanced Settings ═══ -->
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
@@ -310,6 +446,7 @@
                         </label>
                         <select id="sc_prompt_preset" class="text_pole">
                             <option value="narrative">Narrative State (Default)</option>
+                            <option value="narrativeLorebook">Narrative + Lorebook (fork — emits NEW:/UPDATE: tags)</option>
                             <option value="gamestate">Game State</option>
                             <option value="custom">Custom</option>
                         </select>
